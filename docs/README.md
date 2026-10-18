@@ -1,0 +1,14 @@
+---
+type: overview
+updated: 2026-10-18
+---
+
+# Documentation
+
+zunekit is a small set of components for Zune programs. A component is used
+by compiling its source into the program; there is no shared library to
+install. Components rely only on classes that AROS ships (Zune and, for the
+table, NList.mcc).
+
+- [Usage](usage.md): the table component, its calls and its limits.
+- [Development](development.md): building and testing.
