@@ -273,9 +273,22 @@ BOOPSI_DISPATCHER_END
 
 int zk_table_init(void)
 {
-    if (!zk_class)
+    if (!zk_class) {
+        /* The first open of NList.mcc starts its "clipboard server", a process
+         * that lives until the class is expunged and, created without
+         * NP_CurrentDir/NP_HomeDir, keeps copies of our current and home
+         * directory locks: the program's drawer then stays "in use" after the
+         * program has quit (AROS One 1.3). Give it neither while the class is
+         * opened. The library is then found through the system's paths only,
+         * not in PROGDIR:. */
+        struct Process *me = (struct Process *)FindTask(NULL);
+        BPTR home = me->pr_HomeDir, cd = CurrentDir(BNULL);
+        me->pr_HomeDir = BNULL;
         zk_class = MUI_CreateCustomClass(NULL, MUIC_NList, NULL, sizeof(struct zk_data),
                                          zk_dispatcher);
+        me->pr_HomeDir = home;
+        CurrentDir(cd);
+    }
     return zk_class != NULL;
 }
 
