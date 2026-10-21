@@ -1,6 +1,6 @@
 ---
 type: guide
-updated: 2026-10-18
+updated: 2026-10-21
 ---
 
 # Usage
@@ -59,3 +59,37 @@ used on its own. This is a property of Wanderer, not a Workbench interface,
 and another file manager will not be recognised.
 
 Requirements: NList.mcc (shipped with AROS; tested with 20.138).
+
+## zk_steps
+
+A slider over a few named steps, such as an archiver's compression levels
+("Store only", "Fast", "Normal", "Best"). It is the standard Numeric class
+with its own drawing and mouse handling:
+
+- the value is the step's index, 0 to count-1, so the mouse, the cursor keys
+  and the wheel all choose the same values (keys and wheel are Numeric's);
+- every step has a tick; a click or a drag moves the knob to the nearest one;
+- the drawing uses the pens of the MUI preferences, and the size follows the
+  font.
+
+```c
+#include "zk_steps.h"
+
+static const char *levels[] = { "Fast", "Normal", "Best" };
+struct TagItem more[] = { { MUIA_CycleChain, 1 }, { TAG_DONE, 0 } };
+Object *level;
+
+zk_steps_init();                       /* once; 0 on failure */
+level = zk_steps_new(3, 1, more);      /* three steps, "Normal" */
+DoMethod(level, MUIM_Notify, MUIA_Numeric_Value, MUIV_EveryTime,
+         (IPTR)app, 2, MUIM_Application_ReturnID, ID_LEVEL);
+/* fewer or more steps later, without a notification: */
+SetAttrs(level, MUIA_NoNotify, TRUE, MUIA_Numeric_Max, 1, TAG_DONE);
+```
+
+The slider shows no text; the program shows the step's name beside or above
+it. Notifications are Numeric's (`MUIA_Numeric_Value`). A change of
+`MUIA_Numeric_Max` relayouts the group, as for any Numeric.
+
+Keyboard focus is shown with Area's frame, as for other Zune gadgets. A
+disabled slider draws as Zune draws disabled objects.

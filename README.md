@@ -10,6 +10,9 @@ Components:
 - `zk_table`: a multi-column table on NList.mcc with batched appending,
   multiple selection, Amiga+A and dragging selected rows out to a Wanderer
   drawer window. See [usage](docs/usage.md).
+- `zk_steps`: a slider over a few named steps (compression levels and the
+  like) on the standard Numeric class; mouse, keys and wheel choose the same
+  steps.
 
 ## Start here
 
