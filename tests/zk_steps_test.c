@@ -3,7 +3,13 @@
  * of steps is chosen with a cycle gadget (2, 3 or 4 named steps, as an
  * archiver's compression levels), a disabled slider, and a line that shows
  * the value the slider reported and the step's name. With LOG <file> the
- * same lines are appended to that file, for tests driven from outside. */
+ * same lines, and a line for every press on a slider (pointer x, ticks, step
+ * chosen), are appended to that file, for tests driven from outside.
+ *
+ * HIDE or DISABLE: the first time the slider reports step 0 (reached by a
+ * drag), it is hidden or disabled at once, while the button may still be
+ * held; "Restore" shows or enables it again. A drag that survived that would
+ * move the knob on pointer motion alone, with no button held. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,9 +22,11 @@
 #include <clib/alib_protos.h>
 #include "zk_steps.h"
 
-enum { ID_VALUE = 1, ID_COUNT };
+enum { ID_VALUE = 1, ID_COUNT, ID_RESTORE };
 
 static Object *app, *status, *steps, *count_cy;
+static int transition;             /* 0 none, 1 hide, 2 disable */
+static int armed = 1;
 static BPTR logfh;
 
 static const char *names[3][4] = {
@@ -43,6 +51,15 @@ static void note(const char *fmt, ...)
     }
 }
 
+static void trace(const char *line)
+{
+    if (logfh) {
+        FPuts(logfh, line);
+        FPuts(logfh, "\n");
+        Flush(logfh);
+    }
+}
+
 static void show_value(void)
 {
     IPTR v = 0, mx = 0, c = 0;
@@ -57,13 +74,18 @@ int main(int argc, char **argv)
 {
     struct TagItem chain[] = { { MUIA_CycleChain, 1 }, { TAG_DONE, 0 } };
     struct TagItem off[] = { { MUIA_Disabled, TRUE }, { TAG_DONE, 0 } };
-    Object *win, *dis;
+    Object *win, *dis, *restore;
     ULONG sigs = 0;
     int k;
 
     for (k = 1; k < argc; k++)
         if (!strcmp(argv[k], "LOG") && k + 1 < argc)
             logfh = Open((STRPTR)argv[++k], MODE_NEWFILE);
+        else if (!strcmp(argv[k], "HIDE"))
+            transition = 1;
+        else if (!strcmp(argv[k], "DISABLE"))
+            transition = 2;
+    zk_steps_set_trace(trace);
     if (!zk_steps_init()) {
         PutStr("could not create the class\n");
         return 20;
@@ -89,6 +111,7 @@ int main(int argc, char **argv)
                     Child, (IPTR)Label1("Disabled"),
                     Child, (IPTR)dis,
                 End),
+                Child, (IPTR)(restore = SimpleButton("_Restore")),
                 Child, (IPTR)(status = TextObject, TextFrame, MUIA_Text_SetMin, FALSE, End),
             End),
         End),
@@ -104,14 +127,29 @@ int main(int argc, char **argv)
              MUIM_Application_ReturnID, ID_VALUE);
     DoMethod(count_cy, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime, (IPTR)app, 2,
              MUIM_Application_ReturnID, ID_COUNT);
+    DoMethod(restore, MUIM_Notify, MUIA_Pressed, FALSE, (IPTR)app, 2,
+             MUIM_Application_ReturnID, ID_RESTORE);
     SetAttrs(win, MUIA_Window_Open, TRUE, TAG_DONE);
     show_value();
     for (;;) {
         IPTR id = DoMethod(app, MUIM_Application_NewInput, (IPTR)&sigs);
         if (id == (IPTR)MUIV_Application_ReturnID_Quit)
             break;
-        if (id == ID_VALUE)
+        if (id == ID_VALUE) {
+            IPTR v = 0;
             show_value();
+            get(steps, MUIA_Numeric_Value, &v);
+            if (transition && armed && v == 0) {
+                armed = 0;
+                SetAttrs(steps, transition == 1 ? MUIA_ShowMe : MUIA_Disabled,
+                         transition == 1 ? FALSE : TRUE, TAG_DONE);
+                note(transition == 1 ? "hidden" : "disabled");
+            }
+        }
+        if (id == ID_RESTORE) {
+            SetAttrs(steps, MUIA_ShowMe, TRUE, MUIA_Disabled, FALSE, TAG_DONE);
+            note("restored");
+        }
         if (id == ID_COUNT) {
             IPTR c = 0;
             get(count_cy, MUIA_Cycle_Active, &c);

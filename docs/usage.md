@@ -92,4 +92,10 @@ it. Notifications are Numeric's (`MUIA_Numeric_Value`). A change of
 `MUIA_Numeric_Max` relayouts the group, as for any Numeric.
 
 Keyboard focus is shown with Area's frame, as for other Zune gadgets. A
-disabled slider draws as Zune draws disabled objects.
+disabled slider draws as Zune draws disabled objects. A drag ends when the
+button is let go, and also when the slider is hidden or disabled (Zune gives
+it no input then, so the release could be missed) and on a pointer move
+without the button held.
+
+`zk_steps_set_trace(fn)` is a test aid: fn gets a line for every press with
+the pointer's x as received, the slider's position and the tick centres.

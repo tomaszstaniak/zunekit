@@ -30,4 +30,8 @@ void zk_steps_exit(void);
  * NULL on failure. */
 Object *zk_steps_new(ULONG count, ULONG value, const struct TagItem *extra);
 
+/* Test aid: fn (or NULL) gets a line for every press on a slider, with the
+ * pointer's x, the geometry and the step chosen. */
+void zk_steps_set_trace(void (*fn)(const char *line));
+
 #endif

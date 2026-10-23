@@ -23,9 +23,12 @@ then:
 under it, and the log file when given, show what the table reported
 (selection, Amiga+A, drag start and end).
 
-`zk-steps-test [LOG file]` opens a window with a step slider (2, 3 or 4
-steps, chosen with the cycle gadget above it) and a disabled one; the line
-under them, and the log file, show each value the slider reported.
+`zk-steps-test [LOG file] [HIDE|DISABLE]` opens a window with a step slider
+(2, 3 or 4 steps, chosen with the cycle gadget above it) and a disabled one;
+the line under them, and the log file, show each value the slider reported,
+and the log also every press (pointer x, tick centres, step). With HIDE or
+DISABLE the slider is hidden or disabled the first time it reports step 0,
+while a drag may still hold the button; Restore brings it back.
 
 A program uses a component by compiling its file from `src/` with its own
 sources, at a pinned revision of this repository.

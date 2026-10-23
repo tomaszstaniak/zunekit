@@ -18,6 +18,8 @@
 #include <libraries/mui.h>
 #include <clib/alib_protos.h>
 #include <aros/asmcall.h>
+#include <devices/inputevent.h>
+#include <stdio.h>
 #include "zk_steps.h"
 
 struct zs_data {
@@ -27,6 +29,12 @@ struct zs_data {
 };
 
 static struct MUI_CustomClass *zs_class;
+static void (*zs_trace)(const char *line);
+
+void zk_steps_set_trace(void (*fn)(const char *line))
+{
+    zs_trace = fn;
+}
 
 /* Sizes from the font, so the slider grows with it: the knob is a little
  * taller than a line of text and half as wide; the ticks are a quarter. */
@@ -121,10 +129,47 @@ static void set_from_x(Object *obj, int x)
         set(obj, MUIA_Numeric_Value, i);
 }
 
+/* Test aid: what a press saw, against the geometry it was measured on. */
+static void trace_press(Object *obj, int x, LONG step)
+{
+    char b[160], *p = b;
+    LONG i, mx = steps_max(obj);
+    if (!zs_trace)
+        return;
+    p += snprintf(b, sizeof(b), "press MouseX=%d left=%d width=%d knob=%d ticks", x, _mleft(obj),
+                  _mwidth(obj), knob_w(obj));
+    for (i = 0; i <= mx && p < b + sizeof(b) - 8; i++)
+        p += snprintf(p, b + sizeof(b) - p, "%s%d", i ? "," : "=", step_x(obj, i) + knob_w(obj) / 2);
+    snprintf(p, b + sizeof(b) - p, " -> step %ld", (long)step);
+    zs_trace(b);
+}
+
+/* A drag ends when the button is let go. Zune gives a hidden or disabled
+ * object no input, so that release can be missed: the drag also ends when
+ * the object is hidden or disabled, and a move without the button held. */
+static void end_drag(Object *obj, struct zs_data *d, int redraw)
+{
+    if (!d->dragging)
+        return;
+    d->dragging = 0;
+    if (redraw)
+        MUI_Redraw(obj, MADF_DRAWUPDATE);
+}
+
 BOOPSI_DISPATCHER(IPTR, zs_dispatcher, cl, obj, msg)
 {
     struct zs_data *d;
     switch (msg->MethodID) {
+    case OM_SET: {
+        IPTR r = DoSuperMethodA(cl, obj, msg);
+        struct TagItem *t = FindTagItem(MUIA_Disabled, ((struct opSet *)msg)->ops_AttrList);
+        if (t && t->ti_Data)
+            end_drag(obj, INST_DATA(cl, obj), 0);
+        return r;
+    }
+    case MUIM_Hide:
+        end_drag(obj, INST_DATA(cl, obj), 0);
+        break;
     case MUIM_AskMinMax: {
         IPTR r = DoSuperMethodA(cl, obj, msg);
         struct MUI_MinMax *mm = ((struct MUIP_AskMinMax *)msg)->MinMaxInfo;
@@ -173,6 +218,10 @@ BOOPSI_DISPATCHER(IPTR, zs_dispatcher, cl, obj, msg)
         x = he->imsg->MouseX;
         y = he->imsg->MouseY;
         if (he->imsg->Class == IDCMP_MOUSEMOVE && d->dragging) {
+            if (!(he->imsg->Qualifier & IEQUALIFIER_LEFTBUTTON)) {
+                end_drag(obj, d, 1);
+                return 0;
+            }
             set_from_x(obj, x);
             return MUI_EventHandlerRC_Eat;
         }
@@ -182,6 +231,7 @@ BOOPSI_DISPATCHER(IPTR, zs_dispatcher, cl, obj, msg)
         if (he->imsg->Code == SELECTDOWN && !dis && x >= _mleft(obj) && x <= _mright(obj) &&
             y >= _mtop(obj) && y <= _mbottom(obj)) {
             d->dragging = 1;
+            trace_press(obj, x, nearest_step(obj, x));
             if (nearest_step(obj, x) != steps_value(obj))
                 set_from_x(obj, x);
             else
@@ -189,8 +239,7 @@ BOOPSI_DISPATCHER(IPTR, zs_dispatcher, cl, obj, msg)
             return MUI_EventHandlerRC_Eat;
         }
         if (he->imsg->Code == SELECTUP && d->dragging) {
-            d->dragging = 0;
-            MUI_Redraw(obj, MADF_DRAWUPDATE);
+            end_drag(obj, d, 1);
             return MUI_EventHandlerRC_Eat;
         }
         return 0;
