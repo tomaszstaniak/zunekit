@@ -99,3 +99,45 @@ without the button held.
 
 `zk_steps_set_trace(fn)` is a test aid: fn gets a line for every press with
 the pointer's x as received, the slider's position and the tick centres.
+
+## zk_icon
+
+The image of a Workbench icon, without label or frame, as large as the image;
+a program uses it to show its own icon in the header of its main window.
+icon.library draws it (`LayoutIconA` for the window's screen, then
+`DrawIconStateA`), so a PNG icon keeps its alpha channel on any background,
+on AROS One 1.3 as on later systems. Zune's Dtpic is not used for this: it
+drew alpha correctly only from August 2026.
+
+```c
+#include "zk_icon.h"
+
+zk_icon_init();                                  /* once; 0 on failure */
+Object *icon = zk_icon_new("PROGDIR:Unarc", NULL); /* Unarc.info */
+```
+
+A missing icon is not an error: the object then takes no room.
+
+## zk_drop
+
+The place in a window where files are dropped: a dashed border, an arrow and
+two lines of text (the first in bold), drawn with the pens and the font of the
+MUI preferences. It only shows the place. The window receives the drop as any
+Zune AppWindow does (`MUIA_Window_AppWindow`, a notification on
+`MUIA_AppMessage`).
+
+```c
+#include "zk_drop.h"
+
+struct TagItem back[] = { { MUIA_Background, MUII_TextBack }, { TAG_DONE, 0 } };
+
+zk_drop_init();                                  /* once; 0 on failure */
+Object *drop = zk_drop_new("Drop files here", "They are packed at once.", back);
+/* while a drop cannot be taken: */
+zk_drop_set(drop, "Busy", "Drop again when this job is done.");
+```
+
+The minimum width fits the lines given at creation; longer lines set later
+are cut at the border. `zk_drop_set` copies the lines (NULL keeps one) and
+redraws at once. Nothing shows that a drag is over the area: Wanderer sends a
+drop only, and no message while dragging.

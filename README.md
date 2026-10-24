@@ -13,6 +13,10 @@ Components:
 - `zk_steps`: a slider over a few named steps (compression levels and the
   like) on the standard Numeric class; mouse, keys and wheel choose the same
   steps.
+- `zk_icon`: a Workbench icon's image (a program's own icon in its window),
+  drawn by icon.library with its alpha channel.
+- `zk_drop`: the place in a window where files are dropped: a dashed border,
+  an arrow and two lines of text.
 
 ## Start here
 
