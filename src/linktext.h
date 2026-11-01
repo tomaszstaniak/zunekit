@@ -29,7 +29,7 @@
 #define MUIC_Linktext "Linktext.mcc"
 
 #ifndef MUIB_AROS
-#define MUIB_AROS (TAG_USER | 0x10000000)
+#define MUIB_AROS (MUIB_RSVD | 0x00070000)
 #endif
 #define MUIB_Linktext (MUIB_AROS | 0x00000C00)
 
