@@ -1,6 +1,6 @@
 ---
 type: guide
-updated: 2026-10-21
+updated: 2026-11-01
 ---
 
 # Usage
@@ -141,3 +141,24 @@ The minimum width fits the lines given at creation; longer lines set later
 are cut at the border. `zk_drop_set` copies the lines (NULL keeps one) and
 redraws at once. Nothing shows that a drag is over the area: Wanderer sends a
 drop only, and no message while dragging.
+
+## zk_linktext
+
+Read-only wrapped text with links inside its paragraphs: the Linktext class
+compiled into a program, so it needs no class file on the system. The program
+gives plain text and explicit spans, and gets a hook call when the user opens
+or copies a link. It opens nothing itself.
+
+```c
+#include "zk_linktext.h"
+
+zk_linktext_init();                                /* once; 0 on failure */
+group = zk_linktext_new(&view, 1, tags);           /* with a scrollbar */
+DoMethod(view, MUIM_Linktext_SetContent, (IPTR)text, ~0UL, (IPTR)spans, n);
+```
+
+Compile `src/zk_linktext.c`, `src/linktext_class.c` and `src/linktext_core.c`
+with `-DLINKTEXT_EMBEDDED`. `src/linktext.h` has the attributes, methods and
+rules; [Links in text](zune-ui-guide/catalogue/links.md) explains them.
+`scripts/build-linktext.sh v1|v11` builds the test program, and
+`tests/host/linktext_core_test.c` tests the text logic on the host.
