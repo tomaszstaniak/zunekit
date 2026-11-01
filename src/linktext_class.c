@@ -26,7 +26,11 @@
 #define __IFFPARSE_LIBBASE iff_base
 #include <proto/iffparse.h>
 
+#ifdef LINKTEXT_EMBEDDED
 #include "linktext.h"
+#else
+#include <zune/linktext.h>
+#endif
 #include "linktext_core.h"
 #include "linktext_private.h"
 
@@ -174,9 +178,10 @@ IPTR Linktext__MUIM_Draw(Class *cl, Object *obj, struct MUIP_Draw *msg)
     struct Linktext_DATA *d = INST_DATA(cl, obj);
     struct RastPort *rp = _rp(obj);
     APTR clip = NULL, tclip;
+    BOOL partial = d->dirty_first >= 0;
     LONG i, first = d->first, last = d->first + visible(d, obj), top = _mtop(obj), height = _mheight(obj);
 
-    if (d->dirty_first >= 0) {
+    if (partial) {
         if (d->dirty_first > first) first = d->dirty_first;
         if (d->dirty_last < last) last = d->dirty_last;
         top = _mtop(obj) + (first - d->first) * d->lineh;
@@ -192,7 +197,7 @@ IPTR Linktext__MUIM_Draw(Class *cl, Object *obj, struct MUIP_Draw *msg)
            height changed; a failed wrap keeps the lines there are. */
         if (d->laid_w != _mwidth(obj)) {
             layout(d, obj);
-            if (d->dirty_first < 0) { first = d->first; last = d->first + visible(d, obj); }
+            if (!partial) { first = d->first; last = d->first + visible(d, obj); }
         }
         tclip = MUI_AddClipping(muiRenderInfo(obj), _mleft(obj), top, _mwidth(obj), height);
         /* Text over the background: a JAM2 left by whatever drew last fills
@@ -203,13 +208,14 @@ IPTR Linktext__MUIM_Draw(Class *cl, Object *obj, struct MUIP_Draw *msg)
         draw_focus(d, obj, first, last);
         MUI_RemoveClipping(muiRenderInfo(obj), tclip);
     }
-    if (clip) MUI_RemoveClipping(muiRenderInfo(obj), clip);
+    /* The handle of the first clip can be NULL: it is the region before it. */
+    if (partial) MUI_RemoveClipping(muiRenderInfo(obj), clip);
     return 0;
 }
 
 static void redraw_lines(struct Linktext_DATA *d, Object *obj, LONG first, LONG last)
 {
-    if (!d->shown) return;
+    if (!d->shown || last < d->first || first > d->first + visible(d, obj)) return;
     d->dirty_first = first;
     d->dirty_last = last;
     MUI_Redraw(obj, MADF_DRAWOBJECT);
@@ -551,7 +557,12 @@ IPTR Linktext__MUIM_CreateBubble(Class *cl, Object *obj, struct MUIP_CreateBubbl
         d->help[k++] = s->target[i];
     }
     d->help[k] = 0;
-    m.txt = (STRPTR)d->help;
+    m.txt = (APTR)d->help;
+    /* Zune puts a bubble at the pointer, where it takes the next click. A
+       long target's bubble is large and a click on a link is the point of
+       hovering over it. */
+    m.x += 12;
+    m.y += 16;
     return DoSuperMethodA(cl, obj, (Msg)&m);
 }
 

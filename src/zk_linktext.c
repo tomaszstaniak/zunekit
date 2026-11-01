@@ -13,7 +13,7 @@ static struct MUI_CustomClass *mcc;
 
 int zk_linktext_init(void)
 {
-    if (!mcc) mcc = MUI_CreateCustomClass(NULL, MUIC_Area, NULL, Linktext_DataSize(), Linktext_Entry());
+    if (!mcc) mcc = MUI_CreateCustomClass(NULL, (ClassID)MUIC_Area, NULL, Linktext_DataSize(), Linktext_Entry());
     return mcc != NULL;
 }
 
