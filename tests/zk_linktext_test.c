@@ -24,7 +24,7 @@ extern long linktext_fail_after;
 static FILE *lg;
 #define L(...) do { if (lg) { fprintf(lg, __VA_ARGS__); fputc('\n', lg); fflush(lg); } printf(__VA_ARGS__); putchar('\n'); fflush(stdout); } while (0)
 
-enum { ID_CONTENT = 100, ID_BAD, ID_NOMEM, ID_BOXES, ID_CLOSEHOOK, ID_REPLACEHOOK, ID_SCROLLEND };
+enum { ID_CONTENT = 100, ID_BAD, ID_NOMEM, ID_BOXES, ID_CLOSEHOOK, ID_REPLACEHOOK, ID_SCROLLEND, ID_FONT };
 
 static Object *app, *win, *view;
 static int close_on_action, replace_on_action;
@@ -221,7 +221,7 @@ int main(int argc, char **argv)
     g1 = HGroup, Child, (IPTR)btn("Content", ID_CONTENT), Child, (IPTR)btn("Other", ID_REPLACEHOOK),
                  Child, (IPTR)btn("Bad", ID_BAD), Child, (IPTR)btn("NoMem", ID_NOMEM), End;
     g2 = HGroup, Child, (IPTR)btn("Boxes", ID_BOXES), Child, (IPTR)btn("CloseHook", ID_CLOSEHOOK),
-                 Child, (IPTR)btn("End", ID_SCROLLEND), End;
+                 Child, (IPTR)btn("End", ID_SCROLLEND), Child, (IPTR)btn("Font", ID_FONT), End;
     if (!body || !g1 || !g2) { L("no objects"); MUI_DisposeObject(app); return 22; }
     DoMethod(root, OM_ADDMEMBER, (IPTR)body);
     DoMethod(root, OM_ADDMEMBER, (IPTR)g1);
@@ -243,6 +243,17 @@ int main(int argc, char **argv)
         case ID_BOXES: boxes(); break;
         case ID_CLOSEHOOK: close_on_action = 1; L("next action closes the window from the hook"); break;
         case ID_SCROLLEND: set(view, MUIA_Linktext_First, 100000); boxes(); break;
+        case ID_FONT: {
+            /* The way a font comes to a window: closed and set up again. */
+            static const IPTR fonts[] = { MUIV_Font_Fixed, MUIV_Font_Big, MUIV_Font_Tiny, MUIV_Font_List };
+            static int f;
+            set(win, MUIA_Window_Open, FALSE);
+            set(view, MUIA_Font, fonts[f]);
+            f = (f + 1) % 4;
+            set(win, MUIA_Window_Open, TRUE);
+            boxes();
+            break;
+        }
         }
         if (!done && sigs) sigs = Wait(sigs | SIGBREAKF_CTRL_C);
         if (sigs & SIGBREAKF_CTRL_C) done = 1;
