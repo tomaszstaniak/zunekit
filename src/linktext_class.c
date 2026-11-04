@@ -61,10 +61,25 @@ void lt_free(void *p) { if (p) FreeVec(p); }
 
 /* ---------------------------------------------------------------- measure */
 
+/* What measuring and drawing need: the RastPort and the two fonts. */
+struct lt_rp
+{
+    struct RastPort *rp;
+    struct TextFont *normal, *fixed;
+};
+
+static void use_font(struct lt_rp *r, lt_ulong flags)
+{
+    struct TextFont *f = flags & LT_FIXED ? r->fixed : r->normal;
+    if (r->rp->Font != f) SetFont(r->rp, f);
+}
+
 static long measure(void *ctx, const char *s, lt_ulong n, lt_ulong flags)
 {
-    struct RastPort *rp = (struct RastPort *)ctx;
+    struct lt_rp *r = (struct lt_rp *)ctx;
+    struct RastPort *rp = r->rp;
     long w;
+    use_font(r, flags);
     if (flags & LT_BOLD) {
         ULONG old = SetSoftStyle(rp, FSF_BOLD, AskSoftStyle(rp));
         w = TextLength(rp, (STRPTR)s, n);
@@ -72,6 +87,40 @@ static long measure(void *ctx, const char *s, lt_ulong n, lt_ulong flags)
         return w;
     }
     return TextLength(rp, (STRPTR)s, n);
+}
+
+#define AVG_SAMPLE "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+/* The RastPort in the normal font, or NULL outside Show and Hide. The
+   average character width comes from it the first time after Setup. */
+static struct RastPort *ready(struct Linktext_DATA *d, Object *obj, struct lt_rp *r)
+{
+    r->rp = _rp(obj);
+    r->normal = _font(obj);
+    r->fixed = d->fixed ? d->fixed : r->normal;
+    if (!r->rp) return NULL;
+    SetFont(r->rp, r->normal);
+    if (!d->avg) {
+        d->avg = TextLength(r->rp, (STRPTR)AVG_SAMPLE, sizeof AVG_SAMPLE - 1) / (LONG)(sizeof AVG_SAMPLE - 1);
+        if (d->avg < 1) d->avg = 1;
+    }
+    return r->rp;
+}
+
+/* MaxColumns average characters, or the whole width when that is less. */
+static LONG column_width(struct Linktext_DATA *d, Object *obj)
+{
+    LONG w = _mwidth(obj);
+    if (d->max_columns && d->avg > 0 && d->max_columns < (ULONG)(w / d->avg))
+        w = (LONG)d->max_columns * d->avg;
+    return w;
+}
+
+/* The column's left edge in the window, for the lines laid out now. */
+static LONG column_left(struct Linktext_DATA *d, Object *obj)
+{
+    LONG w = d->laid_w >= 0 ? d->laid_w : column_width(d, obj);
+    return _mleft(obj) + (_mwidth(obj) > w ? (_mwidth(obj) - w) / 2 : 0);
 }
 
 static LONG visible(struct Linktext_DATA *d, Object *obj)
@@ -100,36 +149,41 @@ static void clamp_first(struct Linktext_DATA *d, Object *obj)
    Show and Hide. The top line keeps showing the same text. */
 static int layout(struct Linktext_DATA *d, Object *obj)
 {
-    struct RastPort *rp = _rp(obj);
+    struct lt_rp r;
     lt_line *lines = NULL;
     lt_ulong n = 0;
     ULONG anchor;
-    if (!d->content || !rp) return 0;
-    SetFont(rp, _font(obj));
-    if (!lt_layout(d->content, _mwidth(obj), measure, rp, &lines, &n)) return 0;
-    anchor = d->lines && d->first < (LONG)d->nlines ? d->lines[d->first].start : 0;
+    LONG w;
+    BOOL has_anchor;
+    if (!d->content || !ready(d, obj, &r)) return 0;
+    w = column_width(d, obj);
+    if (!lt_layout(d->content, w, d->avg, measure, &r, &lines, &n)) return 0;
+    SetFont(r.rp, r.normal);
+    /* Lines not yet wrapped keep the line number First was set to. */
+    has_anchor = d->lines && d->first < (LONG)d->nlines;
+    anchor = has_anchor ? d->lines[d->first].start : 0;
     lt_free(d->lines);
     d->lines = lines;
     d->nlines = n;
-    d->laid_w = _mwidth(obj);
-    d->first = lt_line_of(lines, n, anchor);
+    d->laid_w = w;
+    if (has_anchor) d->first = lt_line_of(lines, n, anchor);
     clamp_first(d, obj);
     return 1;
 }
 
 /* ------------------------------------------------------------------- draw */
 
-static void draw_line(struct Linktext_DATA *d, Object *obj, ULONG i, LONG y)
+static void draw_line(struct Linktext_DATA *d, Object *obj, struct lt_rp *r, ULONG i, LONG y)
 {
-    struct RastPort *rp = _rp(obj);
+    struct RastPort *rp = r->rp;
     const lt_line *l = &d->lines[i];
     lt_ulong pos = l->start, fl = 0, n;
-    LONG x = _mleft(obj), base = y + rp->TxBaseline;
+    LONG x = column_left(d, obj) + l->x, base = y + d->base;
     ULONG sa = d->sel_anchor < d->sel_caret ? d->sel_anchor : d->sel_caret;
     ULONG sb = d->sel_anchor < d->sel_caret ? d->sel_caret : d->sel_anchor;
 
     while ((n = lt_run(d->content, l, pos, sa, sb, &fl)) != 0) {
-        LONG w = measure(rp, d->content->text + pos, n, fl & LT_BOLD);
+        LONG w = measure(r, d->content->text + pos, n, fl & LT_FONT_FLAGS);
         UBYTE style = 0;
         if (fl & LT_RUN_SEL) {
             SetAPen(rp, _pens(obj)[MPEN_FILL]);
@@ -137,9 +191,9 @@ static void draw_line(struct Linktext_DATA *d, Object *obj, ULONG i, LONG y)
         }
         /* Links stay in the text pen: the Mark pen equals the list background
            in stock settings (AROS 2026.09), and the underline tells them apart. */
-        SetAPen(rp, _pens(obj)[fl & LT_RUN_SEL ? MPEN_SHINE : MPEN_TEXT]);
+        SetAPen(rp, _pens(obj)[fl & LT_RUN_SEL ? MPEN_SHINE : fl & LT_DIM ? d->dim_pen : MPEN_TEXT]);
         if (fl & LT_BOLD) style |= FSF_BOLD;
-        if (fl & LT_RUN_LINK) style |= FSF_UNDERLINED;
+        if ((fl & LT_RUN_LINK) && !(fl & LT_NOUNDERLINE)) style |= FSF_UNDERLINED;
         SetSoftStyle(rp, style, AskSoftStyle(rp));
         Move(rp, x, base);
         Text(rp, (STRPTR)d->content->text + pos, n);
@@ -147,26 +201,58 @@ static void draw_line(struct Linktext_DATA *d, Object *obj, ULONG i, LONG y)
         x += w;
         pos += n;
     }
+    use_font(r, 0);
+}
+
+/* Fill boxes of the blocks on lines first..last, before their text. */
+static void draw_fills(struct Linktext_DATA *d, Object *obj, LONG first, LONG last)
+{
+    struct RastPort *rp = _rp(obj);
+    LONG i, left = column_left(d, obj);
+    long done = -1;
+    if (d->laid_w < 0) return;
+    for (i = first; i <= last && i < (LONG)d->nlines; i++) {
+        long b = d->lines[i].block;
+        const lt_block *bl;
+        lt_ulong f0, f1;
+        long x0, x1;
+        LONG top, bottom;
+        ULONG pen;
+        if (b < 0 || b == done) continue;
+        done = b;
+        bl = &d->content->blocks[b];
+        if (!(bl->flags & LT_BLOCK_FILL)) continue;
+        if (!lt_block_box(d->content, d->lines, d->nlines, (lt_ulong)b, d->laid_w, d->avg, &f0, &f1, &x0, &x1))
+            continue;
+        if ((LONG)f1 > last) f1 = last;
+        top = _mtop(obj) + ((LONG)i - d->first) * d->lineh;
+        bottom = _mtop(obj) + ((LONG)f1 - d->first + 1) * d->lineh - 1;
+        pen = bl->background && bl->background - 1 < MPEN_COUNT ? bl->background - 1 : MPEN_HALFSHINE;
+        SetAPen(rp, _pens(obj)[pen]);
+        RectFill(rp, left + x0, top, left + x1 - 1, bottom);
+    }
 }
 
 /* The keyboard's link gets a frame on each of its fragments. */
-static void draw_focus(struct Linktext_DATA *d, Object *obj, LONG first, LONG last)
+static void draw_focus(struct Linktext_DATA *d, Object *obj, struct lt_rp *r, LONG first, LONG last)
 {
-    struct RastPort *rp = _rp(obj);
+    struct RastPort *rp = r->rp;
     lt_ulong line, f;
     long x0, x1;
+    LONG left = column_left(d, obj);
     if (d->focus < 0 || !d->lines) return;
-    SetAPen(rp, _pens(obj)[MPEN_TEXT]);
-    for (f = 0; lt_link_fragment(d->content, d->lines, d->nlines, d->focus, f, measure, rp, &line, &x0, &x1); f++) {
+    for (f = 0; lt_link_fragment(d->content, d->lines, d->nlines, d->focus, f, measure, r, &line, &x0, &x1); f++) {
         LONG y;
         if ((LONG)line < first || (LONG)line > last) continue;
         y = _mtop(obj) + ((LONG)line - d->first) * d->lineh;
-        Move(rp, _mleft(obj) + x0, y);
-        Draw(rp, _mleft(obj) + x1 - 1, y);
-        Draw(rp, _mleft(obj) + x1 - 1, y + d->lineh - 1);
-        Draw(rp, _mleft(obj) + x0, y + d->lineh - 1);
-        Draw(rp, _mleft(obj) + x0, y);
+        SetAPen(rp, _pens(obj)[MPEN_TEXT]);
+        Move(rp, left + x0, y);
+        Draw(rp, left + x1 - 1, y);
+        Draw(rp, left + x1 - 1, y + d->lineh - 1);
+        Draw(rp, left + x0, y + d->lineh - 1);
+        Draw(rp, left + x0, y);
     }
+    use_font(r, 0);
 }
 
 /* Lines first..last only (dirty_first >= 0) or all of them. Zune tells a
@@ -176,7 +262,7 @@ static void draw_focus(struct Linktext_DATA *d, Object *obj, LONG first, LONG la
 IPTR Linktext__MUIM_Draw(Class *cl, Object *obj, struct MUIP_Draw *msg)
 {
     struct Linktext_DATA *d = INST_DATA(cl, obj);
-    struct RastPort *rp = _rp(obj);
+    struct lt_rp r;
     APTR clip = NULL, tclip;
     BOOL partial = d->dirty_first >= 0;
     LONG i, first = d->first, last = d->first + visible(d, obj), top = _mtop(obj), height = _mheight(obj);
@@ -191,21 +277,24 @@ IPTR Linktext__MUIM_Draw(Class *cl, Object *obj, struct MUIP_Draw *msg)
         clip = MUI_AddClipping(muiRenderInfo(obj), _mleft(obj), top, _mwidth(obj), height);
     }
     DoSuperMethodA(cl, obj, (Msg)msg);
-    if ((msg->flags & (MADF_DRAWOBJECT | MADF_DRAWUPDATE)) && d->content) {
-        SetFont(rp, _font(obj));
+    d->vis = visible(d, obj);
+    if ((msg->flags & (MADF_DRAWOBJECT | MADF_DRAWUPDATE)) && d->content && ready(d, obj, &r)) {
         /* The window can be drawn at a new size before Show when only its
            height changed; a failed wrap keeps the lines there are. */
-        if (d->laid_w != _mwidth(obj)) {
+        if (d->laid_w != column_width(d, obj)) {
             layout(d, obj);
             if (!partial) { first = d->first; last = d->first + visible(d, obj); }
         }
         tclip = MUI_AddClipping(muiRenderInfo(obj), _mleft(obj), top, _mwidth(obj), height);
         /* Text over the background: a JAM2 left by whatever drew last fills
            a rectangle behind every run. */
-        SetDrMd(rp, JAM1);
-        for (i = first; i <= last && i < (LONG)d->nlines; i++)
-            draw_line(d, obj, i, _mtop(obj) + (i - d->first) * d->lineh);
-        draw_focus(d, obj, first, last);
+        SetDrMd(r.rp, JAM1);
+        if (d->lines) {
+            draw_fills(d, obj, first, last);
+            for (i = first; i <= last && i < (LONG)d->nlines; i++)
+                draw_line(d, obj, &r, i, _mtop(obj) + (i - d->first) * d->lineh);
+        }
+        draw_focus(d, obj, &r, first, last);
         MUI_RemoveClipping(muiRenderInfo(obj), tclip);
     }
     /* The handle of the first clip can be NULL: it is the region before it. */
@@ -306,17 +395,17 @@ static BOOL inside(Object *obj, LONG x, LONG y)
    caret position nearest to it, for selecting. */
 static long at_pointer(struct Linktext_DATA *d, Object *obj, LONG mx, LONG my, ULONG *caret)
 {
-    struct RastPort *rp = _rp(obj);
+    struct lt_rp r;
     LONG line;
     lt_ulong c = 0;
     long off;
     *caret = 0;
-    if (!d->lines || !d->nlines || !rp) return -1;
-    SetFont(rp, _font(obj));
+    if (!d->lines || !d->nlines || !ready(d, obj, &r)) return -1;
     line = my < _mtop(obj) ? d->first - 1 : d->first + (my - _mtop(obj)) / d->lineh;
     if (line < 0) return -1;
     if (line >= (LONG)d->nlines) { *caret = d->content->len; return -1; }
-    off = lt_hit(d->content, &d->lines[line], mx - _mleft(obj), measure, rp, &c);
+    off = lt_hit(d->content, &d->lines[line], mx - column_left(d, obj), measure, &r, &c);
+    use_font(&r, 0);
     *caret = c;
     return inside(obj, mx, my) ? off : -1;
 }
@@ -361,14 +450,14 @@ static void clear_selection(struct Linktext_DATA *d, Object *obj)
 
 static void reveal_link(struct Linktext_DATA *d, Object *obj, long link)
 {
-    struct RastPort *rp = _rp(obj);
+    struct lt_rp r;
     lt_ulong line = 0, f = 0, last;
     long x0, x1;
-    if (link < 0 || !rp) return;
-    SetFont(rp, _font(obj));
-    if (!lt_link_fragment(d->content, d->lines, d->nlines, link, 0, measure, rp, &line, &x0, &x1)) return;
+    if (link < 0 || !ready(d, obj, &r)) return;
+    if (!lt_link_fragment(d->content, d->lines, d->nlines, link, 0, measure, &r, &line, &x0, &x1)) return;
     last = line;
-    for (f = 1; lt_link_fragment(d->content, d->lines, d->nlines, link, f, measure, rp, &last, &x0, &x1); f++) ;
+    for (f = 1; lt_link_fragment(d->content, d->lines, d->nlines, link, f, measure, &r, &last, &x0, &x1); f++) ;
+    use_font(&r, 0);
     if ((LONG)line < d->first) scroll_to(d, obj, line);
     else if ((LONG)last >= d->first + visible(d, obj)) {
         LONG top = (LONG)last - visible(d, obj) + 1;
@@ -568,41 +657,61 @@ IPTR Linktext__MUIM_CreateBubble(Class *cl, Object *obj, struct MUIP_CreateBubbl
 
 /* ------------------------------------------------------------- MUI basics */
 
-IPTR Linktext__MUIM_Linktext_SetContent(Class *cl, Object *obj, struct MUIP_Linktext_SetContent *msg)
+IPTR Linktext__MUIM_Linktext_SetDocument(Class *cl, Object *obj, struct MUIP_Linktext_SetDocument *msg)
 {
     struct Linktext_DATA *d = INST_DATA(cl, obj);
     lt_span_in stack[16], *in = stack;
-    lt_content *c;
+    lt_block_in bstack[8], *bin = bstack;
+    lt_content *c = NULL;
     lt_line *lines = NULL;
     lt_ulong n = 0, i;
     int status = LT_OK;
+    struct lt_rp r;
 
     if (msg->SpanCount > 16) {
         if (msg->SpanCount > LINKTEXT_MAX_SPANS) return MUIV_Linktext_Status_TooLarge;
         in = (lt_span_in *)lt_alloc(sizeof *in * msg->SpanCount);
         if (!in) return MUIV_Linktext_Status_NoMemory;
     }
-    if (msg->SpanCount && !msg->Spans) status = LT_RANGE;
+    if (msg->BlockCount > 8) {
+        /* Each block has a paragraph of its own: more blocks than the text
+           can have paragraphs are refused before anything is allocated. */
+        lt_ulong tl = lt_text_length((const char *)msg->Text,
+                                     msg->Length == (ULONG)~0UL ? (lt_ulong)-1 : msg->Length);
+        if (msg->BlockCount - 1 > tl) status = LT_ORDER;
+        else if (!(bin = (lt_block_in *)lt_alloc(sizeof *bin * msg->BlockCount))) status = LT_NOMEM;
+    }
+    if (status == LT_OK && msg->SpanCount && !msg->Spans) status = LT_RANGE;
+    if (status == LT_OK && msg->BlockCount && !msg->Blocks) status = LT_RANGE;
     for (i = 0; status == LT_OK && i < msg->SpanCount; i++) {
         in[i].start = msg->Spans[i].Start;
         in[i].length = msg->Spans[i].Length;
-        in[i].flags = msg->Spans[i].Flags & MUIV_Linktext_Span_Bold ? LT_BOLD : 0;
+        in[i].flags = msg->Spans[i].Flags & LT_SPAN_FLAGS;
         in[i].target = (const char *)msg->Spans[i].Target;
         in[i].id = msg->Spans[i].ID;
     }
-    c = status == LT_OK
-        ? lt_content_new((const char *)msg->Text, msg->Length == (ULONG)~0UL ? (lt_ulong)-1 : msg->Length, in, msg->SpanCount, &status)
-        : NULL;
+    for (i = 0; status == LT_OK && i < msg->BlockCount; i++) {
+        bin[i].start = msg->Blocks[i].Start;
+        bin[i].length = msg->Blocks[i].Length;
+        bin[i].flags = msg->Blocks[i].Flags;
+        bin[i].indent = msg->Blocks[i].Indent;
+        bin[i].rindent = msg->Blocks[i].RightIndent;
+        bin[i].background = msg->Blocks[i].Background;
+    }
+    if (status == LT_OK)
+        c = lt_document_new((const char *)msg->Text, msg->Length == (ULONG)~0UL ? (lt_ulong)-1 : msg->Length,
+                            in, msg->SpanCount, bin, msg->BlockCount, &status);
     if (in != stack) lt_free(in);
+    if (bin != bstack) lt_free(bin);
     if (!c) return status;           /* the status numbers are the same */
 
     /* Wrapped before anything changes: a failure here keeps the old text too. */
-    if (d->shown && _rp(obj)) {
-        SetFont(_rp(obj), _font(obj));
-        if (!lt_layout(c, _mwidth(obj), measure, _rp(obj), &lines, &n)) {
+    if (d->shown && ready(d, obj, &r)) {
+        if (!lt_layout(c, column_width(d, obj), d->avg, measure, &r, &lines, &n)) {
             lt_content_unref(c);
             return MUIV_Linktext_Status_NoMemory;
         }
+        use_font(&r, 0);
     }
     if (d->pressed) cancel_press(d, obj);
     lt_content_unref(d->content);
@@ -610,8 +719,8 @@ IPTR Linktext__MUIM_Linktext_SetContent(Class *cl, Object *obj, struct MUIP_Link
     d->content = c;
     d->lines = lines;
     d->nlines = n;
-    d->laid_w = lines ? _mwidth(obj) : -1;
-    d->first = 0;
+    d->laid_w = lines ? column_width(d, obj) : -1;
+    if (lines) clamp_first(d, obj);
     d->sel_anchor = d->sel_caret = 0;
     d->focus = -1;
     d->press_link = -1;
@@ -620,23 +729,47 @@ IPTR Linktext__MUIM_Linktext_SetContent(Class *cl, Object *obj, struct MUIP_Link
     return MUIV_Linktext_Status_OK;
 }
 
+IPTR Linktext__MUIM_Linktext_SetContent(Class *cl, Object *obj, struct MUIP_Linktext_SetContent *msg)
+{
+    struct MUIP_Linktext_SetDocument m;
+    m.MethodID = MUIM_Linktext_SetDocument;
+    m.Text = msg->Text;
+    m.Length = msg->Length;
+    m.Spans = msg->Spans;
+    m.SpanCount = msg->SpanCount;
+    m.Blocks = NULL;
+    m.BlockCount = 0;
+    return Linktext__MUIM_Linktext_SetDocument(cl, obj, &m);
+}
+
 IPTR Linktext__MUIM_Linktext_LinkBox(Class *cl, Object *obj, struct MUIP_Linktext_LinkBox *msg)
 {
     struct Linktext_DATA *d = INST_DATA(cl, obj);
-    struct RastPort *rp = _rp(obj);
+    struct lt_rp r;
     lt_ulong line;
     long x0, x1;
     LONG y;
-    if (!d->shown || !d->lines || !rp) return FALSE;
-    SetFont(rp, _font(obj));
-    if (!lt_link_fragment(d->content, d->lines, d->nlines, msg->Link, msg->Fragment, measure, rp, &line, &x0, &x1))
-        return FALSE;
+    int found;
+    if (!d->shown || !d->lines || !ready(d, obj, &r)) return FALSE;
+    found = lt_link_fragment(d->content, d->lines, d->nlines, msg->Link, msg->Fragment, measure, &r, &line, &x0, &x1);
+    use_font(&r, 0);
+    if (!found) return FALSE;
     y = _mtop(obj) + ((LONG)line - d->first) * d->lineh;
-    msg->Box->Left = _mleft(obj) + x0;
+    msg->Box->Left = column_left(d, obj) + x0;
     msg->Box->Top = y;
     msg->Box->Width = x1 - x0;
     msg->Box->Height = d->lineh;
     return y + d->lineh > _mtop(obj) && y < _mtop(obj) + _mheight(obj);
+}
+
+/* The column changed: wrapped again now when shown, else at Show. */
+static void relayout(struct Linktext_DATA *d, Object *obj)
+{
+    d->laid_w = -1;
+    if (!d->shown || !d->content) return;
+    layout(d, obj);
+    update_prop(d, obj);
+    MUI_Redraw(obj, MADF_DRAWOBJECT);
 }
 
 static void set_tags(struct Linktext_DATA *d, Object *obj, struct TagItem *tags, BOOL init)
@@ -648,7 +781,17 @@ static void set_tags(struct Linktext_DATA *d, Object *obj, struct TagItem *tags,
         case MUIA_Linktext_Lines:      if (init && tag->ti_Data) d->want_lines = tag->ti_Data; break;
         case MUIA_Linktext_FixHeight:  if (init) d->fix_height = tag->ti_Data != 0; break;
         case MUIA_Linktext_Scroller:   if (init) d->scroller = (Object *)tag->ti_Data; break;
-        case MUIA_Linktext_First:      scroll_to(d, obj, (LONG)tag->ti_Data); break;
+        case MUIA_Linktext_First:
+            /* ~0UL and anything else past the end go to the end. */
+            if (d->shown) scroll_to(d, obj, tag->ti_Data > 0x7fffffffUL ? 0x7fffffffL : (LONG)tag->ti_Data);
+            else d->first = tag->ti_Data > 0x7fffffffUL ? 0x7fffffffL : (LONG)tag->ti_Data;
+            break;
+        case MUIA_Linktext_MaxColumns:
+            if (d->max_columns != (ULONG)tag->ti_Data) {
+                d->max_columns = (ULONG)tag->ti_Data;
+                if (!init) relayout(d, obj);
+            }
+            break;
         }
     }
 }
@@ -724,6 +867,8 @@ IPTR Linktext__OM_GET(Class *cl, Object *obj, struct opGet *msg)
     case MUIA_Linktext_Lines:      *msg->opg_Storage = d->want_lines; return TRUE;
     case MUIA_Linktext_First:      *msg->opg_Storage = d->first; return TRUE;
     case MUIA_Linktext_LineCount:  *msg->opg_Storage = d->nlines; return TRUE;
+    case MUIA_Linktext_MaxColumns: *msg->opg_Storage = d->max_columns; return TRUE;
+    case MUIA_Linktext_Visible:    *msg->opg_Storage = d->shown ? (ULONG)visible(d, obj) : d->vis; return TRUE;
     }
     return DoSuperMethodA(cl, obj, (Msg)msg);
 }
@@ -734,7 +879,6 @@ IPTR Linktext__MUIM_AskMinMax(Class *cl, Object *obj, struct MUIP_AskMinMax *msg
     struct TextFont *f = _font(obj);
     LONG h;
     DoSuperMethodA(cl, obj, (Msg)msg);
-    d->lineh = f->tf_YSize + 1;
     h = d->lineh * (LONG)d->want_lines;
     msg->MinMaxInfo->MinWidth += f->tf_XSize * 12;
     msg->MinMaxInfo->DefWidth += f->tf_XSize * 40;
@@ -745,11 +889,70 @@ IPTR Linktext__MUIM_AskMinMax(Class *cl, Object *obj, struct MUIP_AskMinMax *msg
     return 0;
 }
 
+/* The user's fixed font, as MUI opens it for any object that asks for
+   MUIV_Font_Fixed: a frameless Rectangle set up with this object's render
+   info, the way a group sets up its children. The window keeps the font
+   open until its own cleanup. Without it, fixed spans use the normal font. */
+static void fixed_font_setup(struct Linktext_DATA *d, Object *obj)
+{
+    Object *o = MUI_NewObject(MUIC_Rectangle, MUIA_Font, MUIV_Font_Fixed, TAG_DONE);
+    d->fixed = NULL;
+    if (!o) return;
+    DoMethod(o, MUIM_ConnectParent, (IPTR)obj);
+    if (DoMethod(o, MUIM_Setup, (IPTR)muiRenderInfo(obj)) && _font(o)) {
+        d->fixed_obj = o;
+        d->fixed = _font(o);
+        return;
+    }
+    DoMethod(o, MUIM_DisconnectParent);
+    MUI_DisposeObject(o);
+}
+
+static void fixed_font_cleanup(struct Linktext_DATA *d)
+{
+    if (!d->fixed_obj) return;
+    DoMethod(d->fixed_obj, MUIM_Cleanup);
+    DoMethod(d->fixed_obj, MUIM_DisconnectParent);
+    MUI_DisposeObject(d->fixed_obj);
+    d->fixed_obj = NULL;
+    d->fixed = NULL;
+}
+
+static ULONG brightness(struct ColorMap *cm, LONG pen)
+{
+    ULONG rgb[3];
+    GetRGB32(cm, pen, 1, rgb);
+    return (rgb[0] >> 24) * 30 + (rgb[1] >> 24) * 59 + (rgb[2] >> 24) * 11;
+}
+
+/* Dim text is the half pen on the text's side of the background: half
+   shadow under dark text on a light scheme, half shine under light text on
+   a dark one. Either way it stays readable and quieter than the text. */
+static UWORD dim_pen(Object *obj)
+{
+    struct ColorMap *cm = _screen(obj) ? _screen(obj)->ViewPort.ColorMap : NULL;
+    if (cm && brightness(cm, _pens(obj)[MPEN_TEXT]) > brightness(cm, _pens(obj)[MPEN_BACKGROUND]))
+        return MPEN_HALFSHINE;
+    return MPEN_HALFSHADOW;
+}
+
 IPTR Linktext__MUIM_Setup(Class *cl, Object *obj, struct MUIP_Setup *msg)
 {
     struct Linktext_DATA *d = INST_DATA(cl, obj);
+    struct TextFont *f, *x;
+    LONG above, below;
     if (!DoSuperMethodA(cl, obj, (Msg)msg)) return FALSE;
-    d->lineh = _font(obj)->tf_YSize + 1;
+    fixed_font_setup(d, obj);
+    /* One line height for both fonts, on a common baseline. */
+    f = _font(obj);
+    x = d->fixed ? d->fixed : f;
+    above = f->tf_Baseline > x->tf_Baseline ? f->tf_Baseline : x->tf_Baseline;
+    below = f->tf_YSize - f->tf_Baseline > x->tf_YSize - x->tf_Baseline
+            ? f->tf_YSize - f->tf_Baseline : x->tf_YSize - x->tf_Baseline;
+    d->base = above;
+    d->lineh = above + below + 1;
+    d->avg = 0;                    /* measured again at Show */
+    d->dim_pen = dim_pen(obj);
     d->laid_w = -1;                /* the font may be another one now */
     DoMethod(_win(obj), MUIM_Window_AddEventHandler, (IPTR)&d->ehn);
     return TRUE;
@@ -760,6 +963,7 @@ IPTR Linktext__MUIM_Cleanup(Class *cl, Object *obj, struct MUIP_Cleanup *msg)
     struct Linktext_DATA *d = INST_DATA(cl, obj);
     cancel_press(d, obj);
     DoMethod(_win(obj), MUIM_Window_RemEventHandler, (IPTR)&d->ehn);
+    fixed_font_cleanup(d);
     return DoSuperMethodA(cl, obj, (Msg)msg);
 }
 
@@ -767,8 +971,11 @@ IPTR Linktext__MUIM_Show(Class *cl, Object *obj, struct MUIP_Show *msg)
 {
     struct Linktext_DATA *d = INST_DATA(cl, obj);
     IPTR r = DoSuperMethodA(cl, obj, (Msg)msg);
+    struct lt_rp lr;
     d->shown = TRUE;
-    if (d->content && d->laid_w != _mwidth(obj)) layout(d, obj);
+    ready(d, obj, &lr);
+    if (d->content && d->laid_w != column_width(d, obj)) layout(d, obj);
+    d->vis = visible(d, obj);
     clamp_first(d, obj);
     update_prop(d, obj);
     return r;
@@ -804,6 +1011,7 @@ BOOPSI_DISPATCHER(IPTR, Linktext_Dispatcher, cl, obj, msg)
     case MUIM_CreateBubble:       return Linktext__MUIM_CreateBubble(cl, obj, (APTR)msg);
     case MUIM_Linktext_SetContent: return Linktext__MUIM_Linktext_SetContent(cl, obj, (APTR)msg);
     case MUIM_Linktext_LinkBox:   return Linktext__MUIM_Linktext_LinkBox(cl, obj, (APTR)msg);
+    case MUIM_Linktext_SetDocument: return Linktext__MUIM_Linktext_SetDocument(cl, obj, (APTR)msg);
     }
     return DoSuperMethodA(cl, obj, msg);
 }

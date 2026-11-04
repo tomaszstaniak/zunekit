@@ -9,10 +9,36 @@
 lt_content *lt_content_new(const char *text, lt_ulong len, const lt_span_in *in,
                            lt_ulong n, int *status)
 {
+    return lt_document_new(text, len, in, n, NULL, 0, status);
+}
+
+/* A block covers whole paragraphs: it starts where one starts and ends
+   where one ends. Each one after the previous block's end and its newline. */
+static int check_blocks(const char *text, lt_ulong len, const lt_block_in *b, lt_ulong nb)
+{
+    lt_ulong i, next = 0;
+    /* Every block holds at least one paragraph of its own. */
+    if (nb && nb - 1 > len) return LT_ORDER;
+    if (nb && !b) return LT_RANGE;
+    for (i = 0; i < nb; i++) {
+        lt_ulong s = b[i].start, e;
+        if (s > len || b[i].length > len - s) return LT_RANGE;
+        e = s + b[i].length;
+        if ((s && text[s - 1] != '\n') || (e < len && text[e] != '\n')) return LT_RANGE;
+        if (s < next) return LT_ORDER;
+        next = e + 1;
+    }
+    return LT_OK;
+}
+
+lt_content *lt_document_new(const char *text, lt_ulong len, const lt_span_in *in,
+                            lt_ulong n, const lt_block_in *blk, lt_ulong nb, int *status)
+{
     lt_content *c;
     size_t need, tsum = 0;
     lt_ulong i, nl = 0, end = 0;
     char *p;
+    int st;
 
     if (!text) { text = ""; len = 0; }
     if (len == (lt_ulong)-1) {
@@ -40,10 +66,12 @@ lt_content *lt_content_new(const char *text, lt_ulong len, const lt_span_in *in,
             nl++;
         }
     }
+    if ((st = check_blocks(text, len, blk, nb)) != LT_OK) { *status = st; return NULL; }
 
     /* Many targets can each be within the limit and still pass size_t on a
        32-bit system, so the sum is tested, not only its parts. */
-    need = sizeof *c + sizeof(lt_span) * n + sizeof(lt_ulong) * nl + 2 * sizeof(void *);
+    need = sizeof *c + sizeof(lt_span) * n + sizeof(lt_block) * nb + sizeof(lt_ulong) * nl
+           + 2 * sizeof(void *);
     if (tsum > (size_t)-1 - need || (size_t)len + 1 > (size_t)-1 - need - tsum) {
         *status = LT_TOOLARGE;
         return NULL;
@@ -55,7 +83,8 @@ lt_content *lt_content_new(const char *text, lt_ulong len, const lt_span_in *in,
     memset(c, 0, sizeof *c);
     c->refs = 1;
     c->spans = (lt_span *)(c + 1);
-    c->links = (lt_ulong *)(c->spans + n);
+    c->blocks = (lt_block *)(c->spans + n);
+    c->links = (lt_ulong *)(c->blocks + nb);
     p = (char *)(c->links + nl);
     c->text = p;
     c->len = len;
@@ -65,16 +94,18 @@ lt_content *lt_content_new(const char *text, lt_ulong len, const lt_span_in *in,
     }
     p[len] = 0;
     p += len + 1;
+    c->nblocks = nb;
+    for (i = 0; i < nb; i++) c->blocks[i] = blk[i];
     c->nspans = n;
     for (i = 0; i < n; i++) {
         lt_span *s = &c->spans[i];
         s->start = in[i].start;
         s->length = in[i].length;
-        s->flags = in[i].flags;
+        s->flags = in[i].flags & LT_SPAN_FLAGS;
         s->id = in[i].id;
         s->target = NULL;
         s->target_len = 0;
-        if (in[i].flags & LT_BOLD) c->any_bold = 1;
+        if (in[i].flags & LT_FONT_FLAGS) c->any_font = 1;
         if (in[i].target) {
             size_t tl = strlen(in[i].target);
             memcpy(p, in[i].target, tl + 1);
@@ -86,6 +117,12 @@ lt_content *lt_content_new(const char *text, lt_ulong len, const lt_span_in *in,
     }
     *status = LT_OK;
     return c;
+}
+
+lt_ulong lt_text_length(const char *text, lt_ulong len)
+{
+    if (!text) return 0;
+    return len == (lt_ulong)-1 ? (lt_ulong)strlen(text) : len;
 }
 
 void lt_content_ref(lt_content *c) { c->refs++; }
@@ -112,13 +149,13 @@ long lt_width(const lt_content *c, lt_ulong start, lt_ulong n, lt_measure m, voi
     lt_ulong end = start + n, i;
     long w = 0;
     if (!n) return 0;
-    if (!c->any_bold) return m(ctx, c->text + start, n, 0);
+    if (!c->any_font) return m(ctx, c->text + start, n, 0);
     for (i = span_from(c, start); start < end; ) {
         lt_ulong stop = end, fl = 0;
         if (i < c->nspans && c->spans[i].start <= start) {
             lt_ulong se = c->spans[i].start + c->spans[i].length;
             if (se < stop) stop = se;
-            fl = c->spans[i].flags & LT_BOLD;
+            fl = c->spans[i].flags & LT_FONT_FLAGS;
             i++;
         } else if (i < c->nspans && c->spans[i].start < stop) {
             stop = c->spans[i].start;
@@ -145,7 +182,8 @@ static lt_ulong fit(const lt_content *c, lt_ulong pos, lt_ulong max, long width,
     return lo;
 }
 
-static int push(lt_line **a, lt_ulong *n, lt_ulong *cap, lt_ulong start, lt_ulong len, lt_ulong shown)
+static int push(lt_line **a, lt_ulong *n, lt_ulong *cap, lt_ulong start, lt_ulong len, lt_ulong shown,
+                long x, long block)
 {
     if (*n == *cap) {
         lt_ulong nc = *cap ? *cap * 2 : 32;
@@ -158,6 +196,8 @@ static int push(lt_line **a, lt_ulong *n, lt_ulong *cap, lt_ulong start, lt_ulon
     (*a)[*n].start = start;
     (*a)[*n].len = len;
     (*a)[*n].shown = shown;
+    (*a)[*n].x = x;
+    (*a)[*n].block = block;
     (*n)++;
     return 1;
 }
@@ -168,21 +208,51 @@ static int soft_break(char ch)
     return ch == '/' || ch == '?' || ch == '&' || ch == '=' || ch == '-' || ch == '.';
 }
 
-int lt_layout(const lt_content *c, long width, lt_measure m, void *ctx, lt_line **out, lt_ulong *n)
+/* Indents in pixels, limited to the width first so that a huge indent
+   cannot overflow. */
+static long indent_px(lt_ulong chars, long width, long avg)
+{
+    if (width < 0) width = 0;
+    return chars > (lt_ulong)(width / avg) ? width : (long)chars * avg;
+}
+
+void lt_block_area(const lt_block *b, long width, long avg, long *left, long *area)
+{
+    long l, r, w;
+    if (avg < 1) avg = 1;
+    l = indent_px(b->indent, width, avg);
+    r = indent_px(b->rindent, width, avg);
+    w = width - l - r;
+    if (w < avg) w = avg;
+    *left = l;
+    *area = w;
+}
+
+int lt_layout(const lt_content *c, long width, long avg, lt_measure m, void *ctx, lt_line **out, lt_ulong *n)
 {
     lt_line *a = NULL;
-    lt_ulong cnt = 0, cap = 0, para = 0;
+    lt_ulong cnt = 0, cap = 0, para = 0, bi = 0, i;
     const char *t = c->text;
 
     while (para <= c->len) {
         const char *nlp = para < c->len ? (const char *)memchr(t + para, '\n', c->len - para) : NULL;
         lt_ulong e = nlp ? (lt_ulong)(nlp - t) : c->len, pos = para;
+        long w = width, x = 0, blk = -1;
+        int right = 0;
 
+        while (bi < c->nblocks && c->blocks[bi].start + c->blocks[bi].length < para) bi++;
+        if (bi < c->nblocks && c->blocks[bi].start <= para) {
+            lt_block_area(&c->blocks[bi], width, avg, &x, &w);
+            blk = (long)bi;
+            right = (c->blocks[bi].flags & LT_BLOCK_RIGHT) != 0;
+        }
+        /* A Right block's lines keep their widths in x until the block is
+           whole; then they all move to the place of the widest. */
         if (pos == e) {
-            if (!push(&a, &cnt, &cap, pos, 0, 0)) goto fail;
+            if (!push(&a, &cnt, &cap, pos, 0, 0, right ? 0 : x, blk)) goto fail;
         }
         while (pos < e) {
-            lt_ulong f = fit(c, pos, e - pos, width, m, ctx), brk, i, shown;
+            lt_ulong f = fit(c, pos, e - pos, w, m, ctx), brk, shown;
             if (pos + f >= e) {
                 brk = e;
             } else if (t[pos + f] == ' ') {
@@ -196,7 +266,7 @@ int lt_layout(const lt_content *c, long width, lt_measure m, void *ctx, lt_line 
                        and be cut anyway: start it on this line. */
                     lt_ulong we = brk;
                     while (we < e && t[we] != ' ') we++;
-                    if (lt_width(c, brk, we - brk, m, ctx) > width) brk = 0;
+                    if (lt_width(c, brk, we - brk, m, ctx) > w) brk = 0;
                 }
                 if (!brk) {
                     for (i = pos + f; i > pos + f / 2; i--)
@@ -208,11 +278,25 @@ int lt_layout(const lt_content *c, long width, lt_measure m, void *ctx, lt_line 
             while (shown && t[pos + shown - 1] == ' ') shown--;
             /* Spaces at the break hang past the edge, on this line. */
             while (brk < e && t[brk] == ' ') brk++;
-            if (!push(&a, &cnt, &cap, pos, brk - pos, shown)) goto fail;
+            if (!push(&a, &cnt, &cap, pos, brk - pos, shown,
+                      right ? lt_width(c, pos, shown, m, ctx) : x, blk)) goto fail;
             pos = brk;
         }
         if (!nlp) break;
         para = e + 1;
+    }
+
+    for (i = 0; i < cnt; ) {
+        lt_ulong j;
+        long wide = 0, left, area, x;
+        const lt_block *b;
+        if (a[i].block < 0 || !(c->blocks[a[i].block].flags & LT_BLOCK_RIGHT)) { i++; continue; }
+        b = &c->blocks[a[i].block];
+        for (j = i; j < cnt && a[j].block == a[i].block; j++)
+            if (a[j].x > wide) wide = a[j].x;
+        lt_block_area(b, width, avg, &left, &area);
+        x = wide < area ? left + area - wide : left;
+        for (; i < j; i++) a[i].x = x;
     }
     *out = a;
     *n = cnt;
@@ -220,6 +304,25 @@ int lt_layout(const lt_content *c, long width, lt_measure m, void *ctx, lt_line 
 fail:
     lt_free(a);
     return 0;
+}
+
+int lt_block_box(const lt_content *c, const lt_line *l, lt_ulong nl, lt_ulong b,
+                 long width, long avg, lt_ulong *first, lt_ulong *last, long *x0, long *x1)
+{
+    lt_ulong i;
+    long left, area, pad;
+    if (b >= c->nblocks || !nl) return 0;
+    i = lt_line_of(l, nl, c->blocks[b].start);
+    if (l[i].block != (long)b) return 0;
+    *first = i;
+    while (i + 1 < nl && l[i + 1].block == (long)b) i++;
+    *last = i;
+    if (avg < 1) avg = 1;
+    pad = avg / 2;
+    lt_block_area(&c->blocks[b], width, avg, &left, &area);
+    *x0 = (c->blocks[b].flags & LT_BLOCK_RIGHT ? l[*first].x : left) - pad;
+    *x1 = left + area + pad;
+    return 1;
 }
 
 lt_ulong lt_line_of(const lt_line *l, lt_ulong n, lt_ulong off)
@@ -237,6 +340,7 @@ long lt_hit(const lt_content *c, const lt_line *line, long x, lt_measure m, void
 {
     lt_ulong lo = 0, hi = line->shown;
     long wlo, whi;
+    x -= line->x;
     if (x <= 0 || !line->shown) {
         *caret = line->start;
         return x >= 0 && line->shown ? (long)line->start : -1;
@@ -295,7 +399,7 @@ int lt_link_fragment(const lt_content *c, const lt_line *l, lt_ulong nl, lt_ulon
         if (a >= b) continue;
         if (f--) continue;
         *line = i;
-        *x0 = lt_width(c, l[i].start, a - l[i].start, m, ctx);
+        *x0 = l[i].x + lt_width(c, l[i].start, a - l[i].start, m, ctx);
         *x1 = *x0 + lt_width(c, a, b - a, m, ctx);
         return 1;
     }
@@ -312,7 +416,7 @@ lt_ulong lt_run(const lt_content *c, const lt_line *line, lt_ulong pos,
         const lt_span *s = &c->spans[i];
         if (s->start <= pos) {
             if (s->start + s->length < stop) stop = s->start + s->length;
-            fl |= s->flags & LT_BOLD;
+            fl |= s->flags & LT_SPAN_FLAGS;
             if (s->target) fl |= LT_RUN_LINK;
         } else if (s->start < stop) {
             stop = s->start;

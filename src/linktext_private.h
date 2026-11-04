@@ -10,9 +10,15 @@ struct Linktext_DATA
     lt_content *content;
     lt_line *lines;
     ULONG nlines;
-    LONG laid_w;                 /* width the lines are for, -1: to do */
+    LONG laid_w;                 /* column the lines are for, -1: to do */
     LONG first;                  /* line at the top                    */
-    LONG lineh;
+    LONG lineh, base;            /* line height, baseline in a line    */
+    LONG avg;                    /* average character width, normal font */
+    ULONG max_columns;
+    ULONG vis;                   /* whole lines at the last show or draw */
+    struct TextFont *fixed;      /* between Setup and Cleanup          */
+    Object *fixed_obj;           /* what holds `fixed` open            */
+    UWORD dim_pen;               /* MPEN_* for Span_Dim                */
     LONG dirty_first, dirty_last;
 
     struct Hook *hook;

@@ -42,14 +42,25 @@
 /* [I..] Object *: a Scrollbar or Prop to keep in step, as
    MUIA_TextEditor_Slider. Not disposed by this class. */
 #define MUIA_Linktext_Scroller   (MUIB_Linktext | 0x04)
-/* [.SG] ULONG: the wrapped line at the top. */
+/* [.SG] ULONG: the wrapped line at the top. Set, it is kept within
+   0..LineCount - Visible, so ~0UL goes to the end. */
 #define MUIA_Linktext_First      (MUIB_Linktext | 0x05)
 /* [..G] ULONG: wrapped lines of the current width, 0 before the first show. */
 #define MUIA_Linktext_LineCount  (MUIB_Linktext | 0x06)
+/* [ISG] ULONG: the widest text column, in average characters of the
+   normal font; 0 (default) is the object's whole width. A wider object
+   keeps the column at its centre. */
+#define MUIA_Linktext_MaxColumns (MUIB_Linktext | 0x07)
+/* [..G] ULONG: whole lines that fit in the object now, 0 before the first
+   show. To follow the end of a growing text: at_end = First + Visible >=
+   LineCount before replacing the content, and First ~0UL after it. */
+#define MUIA_Linktext_Visible    (MUIB_Linktext | 0x08)
 
 /* Replaces the whole content, at once or not at all; returns a
    MUIV_Linktext_Status_*. On any failure the content shown before stays
-   and nothing changes. The object copies text and targets during the call. */
+   and nothing changes. The object copies text and targets during the call.
+   First stays the same line number, within the new LineCount; the
+   selection and the keyboard's link are cleared. */
 #define MUIM_Linktext_SetContent (MUIB_Linktext | 0x10)
 struct MUIP_Linktext_SetContent
 {
@@ -73,6 +84,20 @@ struct MUIP_Linktext_LinkBox
     STACKED struct IBox *Box;
 };
 
+/* SetContent with paragraph blocks: the same rules and statuses, and
+   blocks as below. SetContent is SetDocument without blocks. */
+#define MUIM_Linktext_SetDocument (MUIB_Linktext | 0x12)
+struct MUIP_Linktext_SetDocument
+{
+    STACKED ULONG MethodID;
+    STACKED CONST_STRPTR Text;
+    STACKED ULONG Length;
+    STACKED const struct MUI_LinktextSpan *Spans;
+    STACKED ULONG SpanCount;
+    STACKED const struct MUI_LinktextBlock *Blocks;
+    STACKED ULONG BlockCount;
+};
+
 #define MUIV_Linktext_Status_OK       0
 #define MUIV_Linktext_Status_Range    1  /* a span outside the text, or empty */
 #define MUIV_Linktext_Status_Order    2  /* spans overlap or are not in order */
@@ -85,7 +110,10 @@ struct MUIP_Linktext_LinkBox
 #define LINKTEXT_MAX_SPANS  1000000UL
 #define LINKTEXT_MAX_TARGET (16UL * 1024 * 1024)
 
-#define MUIV_Linktext_Span_Bold 1
+#define MUIV_Linktext_Span_Bold        1
+#define MUIV_Linktext_Span_Fixed       2  /* the user's fixed-width font     */
+#define MUIV_Linktext_Span_Dim         4  /* a quieter pen, for secondary text */
+#define MUIV_Linktext_Span_NoUnderline 8  /* a link drawn without its line    */
 
 struct MUI_LinktextSpan
 {
@@ -98,6 +126,33 @@ struct MUI_LinktextSpan
 
 /* Spans come in text order and do not overlap. Several links may share a
    target or an ID. */
+
+/* A block: whole paragraphs laid out together. It starts at the start of a
+   paragraph and ends at the end of one (before its newline, or at the end
+   of the text). Blocks come in text order and do not overlap; paragraphs
+   outside every block are laid out as before. Anything else is refused with
+   Range or Order, the content shown before kept.
+   Indents are in average characters of the normal font, so they follow
+   the user's font. Lines wrap to the block's area: the column less the
+   indents. With Right the block's lines stand together at the right of
+   that area, as wide as its longest line, each line starting at the same
+   left edge, so a short paragraph is a narrow block at the right. With
+   Fill, a box in the Background pen lies behind the block's lines, half an
+   average character wider on each side: across the whole area, or with
+   Right only across the lines. Empty paragraphs inside a block give it
+   room above and below. */
+#define MUIV_Linktext_Block_Right 1   /* the block at the area's right  */
+#define MUIV_Linktext_Block_Fill  2   /* a box in Background behind it  */
+
+struct MUI_LinktextBlock
+{
+    ULONG Start;          /* byte offset of the block's first paragraph       */
+    ULONG Length;         /* bytes; may be 0 for one empty paragraph          */
+    ULONG Flags;          /* MUIV_Linktext_Block_*                            */
+    ULONG Indent;         /* left, in average characters                      */
+    ULONG RightIndent;    /* right, in average characters                     */
+    ULONG Background;     /* with Fill: MPEN_* + 1; 0 is MPEN_HALFSHINE     */
+};
 
 #define MUIV_Linktext_Action_Open 1  /* click, Return, menu                  */
 #define MUIV_Linktext_Action_Copy 2  /* menu, copy key on a focused link     */
