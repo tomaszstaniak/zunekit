@@ -895,7 +895,7 @@ IPTR Linktext__MUIM_AskMinMax(Class *cl, Object *obj, struct MUIP_AskMinMax *msg
    open until its own cleanup. Without it, fixed spans use the normal font. */
 static void fixed_font_setup(struct Linktext_DATA *d, Object *obj)
 {
-    Object *o = MUI_NewObject(MUIC_Rectangle, MUIA_Font, MUIV_Font_Fixed, TAG_DONE);
+    Object *o = MUI_NewObject((CONST_STRPTR)MUIC_Rectangle, MUIA_Font, MUIV_Font_Fixed, TAG_DONE);
     d->fixed = NULL;
     if (!o) return;
     DoMethod(o, MUIM_ConnectParent, (IPTR)obj);
