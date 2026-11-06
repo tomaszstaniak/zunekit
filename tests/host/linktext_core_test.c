@@ -559,7 +559,7 @@ static void heights_and_padding(void)
     c = mkdoc("ab\n\ncd\n\nef", NULL, 0, NULL, 0);
     OK(lt_layout(c, 80, 8, font, NULL, &l, &n) && n == 5);
     OK(l[3].y == 3 && l[3].h == 1);                  /* units until lt_heights */
-    lt_heights(l, n, 16, 6);
+    lt_heights(c, l, n, 16, 6);
     OK(l[0].y == 0 && l[0].h == 16 && l[1].y == 16 && l[1].h == 6);
     OK(l[2].y == 22 && l[3].h == 6 && l[4].y == 44 && l[4].h == 16);
     /* What fits: from line 0 in 40 pixels, 16+6+16 = 38, three lines. */
@@ -573,10 +573,30 @@ static void heights_and_padding(void)
     OK(lt_line_at_y(l, n, 1, 0) == 1 && lt_line_at_y(l, n, 1, 5) == 1 && lt_line_at_y(l, n, 1, 6) == 2);
     OK(lt_line_at_y(l, n, 1, 1000) == n);
     /* out of range values are a whole line */
-    lt_heights(l, n, 16, 0);
+    lt_heights(c, l, n, 16, 0);
     OK(l[1].h == 16);
-    lt_heights(l, n, 16, 40);
+    lt_heights(c, l, n, 16, 40);
     OK(l[1].h == 16);
+    lt_free(l);
+    lt_content_unref(c);
+
+    /* Space blocks: an empty paragraph as high as its PadY says, in
+       eighths of a line (up to two lines); the others EmptyLine. */
+    b[0] = blk(3, 0, LT_BLOCK_SPACE, 0, 0);
+    b[0].pady = 2;
+    c = mkdoc("ab\n\ncd\n\nef", NULL, 0, b, 1);
+    OK(lt_layout(c, 80, 8, font, NULL, &l, &n) && n == 5 && l[1].block == 0 && l[3].block < 0);
+    lt_heights(c, l, n, 16, 6);
+    OK(l[1].h == 4 && l[3].h == 6 && l[2].y == 20 && l[4].y == 42);
+    c->blocks[0].pady = 12;
+    lt_heights(c, l, n, 16, 6);
+    OK(l[1].h == 24);
+    c->blocks[0].pady = 99;
+    lt_heights(c, l, n, 16, 6);
+    OK(l[1].h == 32);
+    c->blocks[0].pady = 0;
+    lt_heights(c, l, n, 16, 6);
+    OK(l[1].h == 1);
     lt_free(l);
     lt_content_unref(c);
 
@@ -681,6 +701,97 @@ static void keep_layout(void)
         c1 = mkdoc(t1, NULL, 0, b1, nb1);
         c2 = mkdoc(t2, NULL, 0, b2, nb2);
         OK(c1 && c2);
+        OK(lt_layout(c1, 64, 8, font, NULL, &l1, &n1));
+        OK(lt_layout(c2, 64, 8, font, NULL, &l2, &n2));
+        keep = lt_common_prefix(c1, c2);
+        OK(lt_layout_keep(c2, 64, 8, font, NULL, c1, l1, n1, keep, &lk, &nk));
+        OK(same_lines(l2, n2, lk, nk));
+        lt_free(l1); lt_free(l2); lt_free(lk);
+        lt_content_unref(c1); lt_content_unref(c2);
+    }
+    /* the same text, other fonts: the review of 2026-11-07 found the
+       kept lines wrong when only spans changed */
+    {
+        lt_span_in sp = { 0, 14, LT_FIXED, NULL, 0 };
+        lt_content *c1 = mk("aaaa bbbb cccc\nlast\n", NULL, 0), *c2 = mk("aaaa bbbb cccc\nlast\n", &sp, 1);
+        lt_line *l1 = NULL, *l2 = NULL, *lk = NULL;
+        lt_ulong n1 = 0, n2 = 0, nk = 0;
+        OK(lt_layout(c1, 120, 8, font, NULL, &l1, &n1));
+        OK(lt_layout(c2, 120, 8, font, NULL, &l2, &n2));
+        OK(n1 != n2);
+        OK(lt_font_prefix(c1, c2, c1->len) == 0);
+        OK(lt_font_prefix(c1, c1, c1->len) == c1->len);
+        OK(lt_layout_keep(c2, 120, 8, font, NULL, c1, l1, n1, lt_common_prefix(c1, c2), &lk, &nk));
+        OK(same_lines(l2, n2, lk, nk));
+        lt_free(lk);
+        /* the other way too */
+        OK(lt_layout_keep(c1, 120, 8, font, NULL, c2, l2, n2, lt_common_prefix(c1, c2), &lk, &nk));
+        OK(same_lines(l1, n1, lk, nk));
+        lt_free(l1); lt_free(l2); lt_free(lk);
+        lt_content_unref(c1); lt_content_unref(c2);
+    }
+    /* random style-only and style-and-text edits: spans moved, added,
+       changed between bold, fixed and neither, with the text the same or
+       changed at its end */
+    for (round = 0; round < 400; round++) {
+        char t1[400], t2[400];
+        lt_span_in s1[6], s2[6];
+        lt_ulong ns1 = 0, ns2 = 0, n1 = 0, n2 = 0, nk = 0, keep, pos, i2;
+        lt_line *l1 = NULL, *l2 = NULL, *lk = NULL;
+        lt_content *c1, *c2;
+        size_t len, cut;
+        int i, k;
+        t1[0] = 0;
+        for (i = 0; i < 30; i++) {
+            seed = seed * 1103515245u + 12345u;
+            strcat(t1, words[(seed >> 8) % 9]);
+        }
+        len = strlen(t1);
+        seed = seed * 1103515245u + 12345u;
+        if ((seed >> 8) % 2) {
+            strcpy(t2, t1);
+        } else {
+            seed = seed * 1103515245u + 12345u;
+            cut = (seed >> 8) % (len + 1);
+            memcpy(t2, t1, cut);
+            t2[cut] = 0;
+            for (i = 0; i < 6; i++) {
+                seed = seed * 1103515245u + 12345u;
+                strcat(t2, words[(seed >> 8) % 9]);
+            }
+        }
+        for (k = 0; k < 2; k++) {
+            const char *t = k ? t2 : t1;
+            lt_span_in *ss = k ? s2 : s1;
+            lt_ulong *nn = k ? &ns2 : &ns1, L = strlen(t);
+            static const lt_ulong fl[3] = { LT_BOLD, LT_FIXED, LT_BOLD | LT_FIXED };
+            pos = 0;
+            while (*nn < 6 && pos < L) {
+                lt_ulong a, b;
+                seed = seed * 1103515245u + 12345u;
+                a = pos + (seed >> 8) % 12;
+                seed = seed * 1103515245u + 12345u;
+                b = a + 1 + (seed >> 8) % 12;
+                if (a >= L) break;
+                if (b > L) b = L;
+                seed = seed * 1103515245u + 12345u;
+                ss[*nn].start = a; ss[*nn].length = b - a; ss[*nn].flags = fl[(seed >> 8) % 3];
+                ss[*nn].target = NULL; ss[*nn].id = 0;
+                (*nn)++;
+                pos = b;
+            }
+        }
+        /* now and then exactly the same spans, so that nothing is laid out
+           again beyond the text's change */
+        seed = seed * 1103515245u + 12345u;
+        if ((seed >> 8) % 4 == 0) {
+            lt_ulong L2 = strlen(t2);
+            ns2 = 0;
+            for (i2 = 0; i2 < ns1; i2++)
+                if (s1[i2].start + s1[i2].length <= L2) s2[ns2++] = s1[i2];
+        }
+        c1 = mk(t1, s1, ns1);
+        c2 = mk(t2, s2, ns2);
         OK(lt_layout(c1, 64, 8, font, NULL, &l1, &n1));
         OK(lt_layout(c2, 64, 8, font, NULL, &l2, &n2));
         keep = lt_common_prefix(c1, c2);

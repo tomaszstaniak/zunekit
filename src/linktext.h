@@ -84,7 +84,8 @@
    MUIV_Linktext_Status_*. On any failure the content shown before stays
    and nothing changes. The object copies text and targets during the call.
    Only the paragraphs from the first byte that differs from the content
-   shown are wrapped again, so a text growing at its end costs its end.
+   shown, in text or in the font its spans give it, are wrapped again, so
+   a text growing at its end costs its end.
    First stays the same line number, within the new LineCount. What lies
    in the bytes the old and the new text start with stays: the selection,
    a drag making one, a pressed link and the keyboard's link (when the
@@ -174,10 +175,14 @@ struct MUI_LinktextSpan
    room above and below. With Pad, the box is PadX eighths of an average
    character wider on each side instead of half of one, and PadY eighths
    of a line (at most 8) taller above and below: into the lines next to
-   the block, which should then be empty paragraphs. */
+   the block, which should then be empty paragraphs. With Space, an
+   empty paragraph of the block is PadY eighths of a line high (1 to 16)
+   instead of EmptyLine: a block of one empty paragraph is a gap of a
+   chosen height, between paragraphs, before a heading or around a box. */
 #define MUIV_Linktext_Block_Right 1   /* the block at the area's right  */
 #define MUIV_Linktext_Block_Fill  2   /* a box in Background behind it  */
 #define MUIV_Linktext_Block_Pad   4   /* the box's room is PadX and PadY */
+#define MUIV_Linktext_Block_Space 8   /* its empty paragraphs PadY/8 lines high */
 
 struct MUI_LinktextBlock
 {

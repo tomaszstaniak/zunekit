@@ -328,6 +328,33 @@ static int same_block(const lt_block *x, const lt_block *y)
         && x->rindent == y->rindent && x->background == y->background && x->padx == y->padx && x->pady == y->pady;
 }
 
+/* The font flags of the text at off, and in *next the first offset after
+   it where they may change. */
+static lt_ulong font_at(const lt_content *c, lt_ulong off, lt_ulong *next)
+{
+    lt_ulong i = span_from(c, off);
+    if (i < c->nspans && c->spans[i].start <= off) {
+        *next = c->spans[i].start + c->spans[i].length;
+        return c->spans[i].flags & LT_FONT_FLAGS;
+    }
+    *next = i < c->nspans ? c->spans[i].start : c->len;
+    return 0;
+}
+
+lt_ulong lt_font_prefix(const lt_content *a, const lt_content *b, lt_ulong upto)
+{
+    lt_ulong pos = 0;
+    if (!a->any_font && !b->any_font) return upto;
+    while (pos < upto) {
+        lt_ulong na, nb, fa = font_at(a, pos, &na), fb = font_at(b, pos, &nb);
+        if (fa != fb) return pos;
+        if (na <= pos) na = pos + 1;
+        if (nb <= pos) nb = pos + 1;
+        pos = na < nb ? na : nb;
+    }
+    return upto;
+}
+
 int lt_layout_keep(const lt_content *c, long width, long avg, lt_measure m, void *ctx,
                    const lt_content *old, const lt_line *ol, lt_ulong on, lt_ulong keep,
                    lt_line **out, lt_ulong *n)
@@ -337,6 +364,8 @@ int lt_layout_keep(const lt_content *c, long width, long avg, lt_measure m, void
     if (!old || !ol || !on || !keep) return lt_layout(c, width, avg, m, ctx, out, n);
     if (p > c->len) p = c->len;
     if (p > old->len) p = old->len;
+    /* The same bytes in another font wrap at other places. */
+    p = lt_font_prefix(old, c, p);
     while (p && c->text[p - 1] != '\n') p--;
     /* A block that differs, or that goes on past p, is laid out again from
        its start: a Right block's lines all move with its widest. */
@@ -381,16 +410,23 @@ int lt_block_box(const lt_content *c, const lt_line *l, lt_ulong nl, lt_ulong b,
     return 1;
 }
 
-void lt_heights(lt_line *l, lt_ulong n, long lineh, long empty)
+void lt_heights(const lt_content *c, lt_line *l, lt_ulong n, long lineh, long empty)
 {
     lt_ulong i;
     long y = 0;
     if (lineh < 1) lineh = 1;
     if (empty < 1 || empty > lineh) empty = lineh;
     for (i = 0; i < n; i++) {
+        long h = l[i].len ? lineh : empty;
+        if (!l[i].len && l[i].block >= 0 && (c->blocks[l[i].block].flags & LT_BLOCK_SPACE)) {
+            lt_ulong e = c->blocks[l[i].block].pady;
+            if (e > LT_SPACE_MAX) e = LT_SPACE_MAX;
+            h = (long)e * lineh / 8;
+            if (h < 1) h = 1;
+        }
         l[i].y = y;
-        l[i].h = l[i].len ? lineh : empty;
-        y += l[i].h;
+        l[i].h = h;
+        y += h;
     }
 }
 

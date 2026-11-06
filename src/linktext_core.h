@@ -59,7 +59,9 @@ enum { LT_OK, LT_RANGE, LT_ORDER, LT_TARGET, LT_TOOLARGE, LT_NOMEM };
 #define LT_BLOCK_RIGHT 1UL
 #define LT_BLOCK_FILL  2UL
 #define LT_BLOCK_PAD   4UL
+#define LT_BLOCK_SPACE 8UL
 #define LT_PAD_MAX     64UL    /* PadX, in eighths of a character */
+#define LT_SPACE_MAX   16UL    /* PadY of a Space block, in eighths of a line */
 
 /* Provided by the build: memory, so that the class needs no C library and
    the tests can fail any allocation. */
@@ -103,16 +105,22 @@ int lt_layout(const lt_content *c, long width, long avg, lt_measure m, void *ctx
 /* The same as lt_layout for c, reusing the lines `ol` (on of them) that
    lt_layout made for `old` at the same width and avg: the paragraphs
    before the first `keep` bytes' last paragraph start (lt_common_prefix)
-   are not wrapped again. Blocks that differ, or reach into the rest, are
-   laid out again from their start. A text growing at its end costs its
-   last paragraphs, not the whole text. */
+   are not wrapped again, nor are those where the bytes are measured in
+   other fonts than before (lt_font_prefix). Blocks that differ, or reach
+   into the rest, are laid out again from their start. A text growing at
+   its end costs its last paragraphs, not the whole text. */
 int lt_layout_keep(const lt_content *c, long width, long avg, lt_measure m, void *ctx,
                    const lt_content *old, const lt_line *ol, lt_ulong on, lt_ulong keep,
                    lt_line **out, lt_ulong *n);
 
+/* The first offset below `upto` at which a's and b's bytes are measured in
+   different fonts (LT_BOLD, LT_FIXED); upto when there is none. */
+lt_ulong lt_font_prefix(const lt_content *a, const lt_content *b, lt_ulong upto);
+
 /* Heights and places of laid-out lines: `lineh` each, an empty paragraph
-   `empty` (1..lineh). */
-void lt_heights(lt_line *l, lt_ulong n, long lineh, long empty);
+   `empty` (1..lineh), an empty paragraph of a Space block its PadY eighths
+   of lineh (1..LT_SPACE_MAX). */
+void lt_heights(const lt_content *c, lt_line *l, lt_ulong n, long lineh, long empty);
 /* The first line that can be at the top with the last line still whole in
    `height` pixels. */
 lt_ulong lt_last_top(const lt_line *l, lt_ulong n, long height);

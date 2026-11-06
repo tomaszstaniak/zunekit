@@ -162,7 +162,7 @@ static int wrap(struct Linktext_DATA *d, Object *obj, const lt_content *c, struc
         if (!lt_layout_keep(c, w, d->avg, measure, r, d->content, d->lines, d->nlines,
                             lt_common_prefix(d->content, c), lines, n)) return 0;
     } else if (!lt_layout(c, w, d->avg, measure, r, lines, n)) return 0;
-    lt_heights(*lines, *n, d->lineh, empty_height(d));
+    lt_heights(c, *lines, *n, d->lineh, empty_height(d));
     return 1;
 }
 
