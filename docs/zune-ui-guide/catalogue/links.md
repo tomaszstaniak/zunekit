@@ -69,6 +69,15 @@ DoMethod(view, MUIM_Linktext_SetContent,
 - Span flags add `MUIV_Linktext_Span_Fixed` (the user's fixed-width font, for code), `MUIV_Linktext_Span_Dim` (a quieter pen for secondary text, chosen against the list background) and `MUIV_Linktext_Span_NoUnderline` (a link that reads as a line of its own, such as a tool line that opens its result).
 - `MUIA_Linktext_MaxColumns` limits the text column to a number of average characters and keeps it at the centre of a wider object. Use it for reading width; the object still fills its space.
 
+### Spacing and colour
+
+A conversation reads better with paragraphs closer than a line apart and with room inside its boxes.
+
+- `MUIA_Linktext_EmptyLine` sets the height of an empty paragraph in eighths of a line (1 to 8; 8 is the default, a whole line). With 4, one empty paragraph between paragraphs is half a line, and two around a box are one line.
+- `MUIV_Linktext_Block_Pad` gives a filled block its own room: `PadX` eighths of an average character at the sides instead of half a character, and `PadY` eighths of a line above and below (at most a whole line). The vertical room is drawn into the paragraphs next to the block, so keep empty paragraphs there, at least as high as `PadY`.
+- `Background` also takes `MUIV_Linktext_RGB(0xrrggbb)`. `MUIA_Linktext_TextColor`, `MUIA_Linktext_DimColor`, `MUIA_Linktext_AccentColor` and `MUIA_Linktext_ShadeColor` take the same; 0 keeps the pen from the user's settings. `MUIV_Linktext_Span_Accent` draws a span in the accent colour, and links use it when it is set. `MUIV_Linktext_Span_Shade` puts a span on a box in the shade colour, for inline code.
+- The class obtains the nearest pens on the screen when it is set up and releases them at cleanup. Set the object's background to match the colours, for example `MUIA_Background, "2:rffffffff,ffffffff,ffffffff"`: colours chosen for one settings scheme can be unreadable on another.
+
 ### Replacing the content
 
 A view that grows while the user reads it, such as a reply that streams in, replaces the whole content each time. The class keeps what the user is doing where it can:
@@ -78,7 +87,9 @@ A view that grows while the user reads it, such as a reply that streams in, repl
 - To follow the end, read `First`, `MUIA_Linktext_Visible` and `MUIA_Linktext_LineCount` before replacing: the view is at the end when `First + Visible >= LineCount`. After replacing, set `First` to `~0UL`, which goes to the last page.
 - A view that shows its last line keeps showing it when it is made smaller or larger, for example when a panel opens below it.
 
-The class copies and wraps the whole text at each replacement, so the cost grows with the text. In Bishop on AROS One 1.3 in QEMU, building and replacing a 47 KB conversation took at most 44 ms, and 6 ms on average over the session. For a much longer text, give the class only the part the user can reach.
+The class copies the whole text at each replacement but wraps only from the first paragraph that changed, keeping the lines before it. A reply streaming at the end of a long conversation costs its own paragraphs. In Bishop on ABIv11 2026.09 in QEMU, with a 47 KB conversation, a replacement took 9 ms on average and at most 52 ms (the resume, which wraps everything); wrapping the whole text each time it was 43 ms on average.
+
+With paragraphs of different heights, `First`, `LineCount` and `Visible` still count lines, while the scroller (`MUIA_Linktext_Scroller`) counts pixels: the class sets its entries, visible part and position, and an arrow moves one line.
 
 ### When memory runs out
 
