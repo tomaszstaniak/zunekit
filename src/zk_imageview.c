@@ -685,6 +685,13 @@ BOOPSI_DISPATCHER(IPTR, iv_dispatcher, cl, obj, msg)
             render(obj, d, d->dr.MinX, d->dr.MinY, d->dr.MaxX + 1, d->dr.MaxY + 1);
             d->dirty = 0;
         } else {
+            /* A full redraw (window uncovered, refreshed) can arrive while a
+             * changed area still waits for its update: compose that area
+             * first, so the copy below never shows the older picture. */
+            if (d->dirty) {
+                render(obj, d, d->dr.MinX, d->dr.MinY, d->dr.MaxX + 1, d->dr.MaxY + 1);
+                d->dirty = 0;
+            }
             BltBitMapRastPort(d->bm, 0, 0, _rp(obj), _mleft(obj), _mtop(obj), d->vw, d->vh,
                               0xC0);
         }
