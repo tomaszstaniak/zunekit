@@ -198,6 +198,8 @@ static int push(lt_line **a, lt_ulong *n, lt_ulong *cap, lt_ulong start, lt_ulon
     (*a)[*n].shown = shown;
     (*a)[*n].x = x;
     (*a)[*n].block = block;
+    (*a)[*n].y = (long)*n;           /* one unit each until lt_heights */
+    (*a)[*n].h = 1;
     (*n)++;
     return 1;
 }
@@ -228,11 +230,15 @@ void lt_block_area(const lt_block *b, long width, long avg, long *left, long *ar
     *area = w;
 }
 
-int lt_layout(const lt_content *c, long width, long avg, lt_measure m, void *ctx, lt_line **out, lt_ulong *n)
+/* Wraps the paragraphs from `para` (a paragraph's start) to the end onto
+   a, which holds *cnt lines already, final. */
+static int wrap_from(const lt_content *c, long width, long avg, lt_measure m, void *ctx, lt_ulong para,
+                     lt_line **ap, lt_ulong *cntp, lt_ulong *capp)
 {
-    lt_line *a = NULL;
-    lt_ulong cnt = 0, cap = 0, para = 0, bi = 0, i;
+    lt_line *a = *ap;
+    lt_ulong cnt = *cntp, cap = *capp, bi = 0, i, first_new = *cntp;
     const char *t = c->text;
+    int ok = 0;
 
     while (para <= c->len) {
         const char *nlp = para < c->len ? (const char *)memchr(t + para, '\n', c->len - para) : NULL;
@@ -286,7 +292,7 @@ int lt_layout(const lt_content *c, long width, long avg, lt_measure m, void *ctx
         para = e + 1;
     }
 
-    for (i = 0; i < cnt; ) {
+    for (i = first_new; i < cnt; ) {
         lt_ulong j;
         long wide = 0, left, area, x;
         const lt_block *b;
@@ -298,12 +304,60 @@ int lt_layout(const lt_content *c, long width, long avg, lt_measure m, void *ctx
         x = wide < area ? left + area - wide : left;
         for (; i < j; i++) a[i].x = x;
     }
+    ok = 1;
+fail:
+    *ap = a;
+    *cntp = cnt;
+    *capp = cap;
+    return ok;
+}
+
+int lt_layout(const lt_content *c, long width, long avg, lt_measure m, void *ctx, lt_line **out, lt_ulong *n)
+{
+    lt_line *a = NULL;
+    lt_ulong cnt = 0, cap = 0;
+    if (!wrap_from(c, width, avg, m, ctx, 0, &a, &cnt, &cap)) { lt_free(a); return 0; }
     *out = a;
     *n = cnt;
     return 1;
-fail:
-    lt_free(a);
-    return 0;
+}
+
+static int same_block(const lt_block *x, const lt_block *y)
+{
+    return x->start == y->start && x->length == y->length && x->flags == y->flags && x->indent == y->indent
+        && x->rindent == y->rindent && x->background == y->background && x->padx == y->padx && x->pady == y->pady;
+}
+
+int lt_layout_keep(const lt_content *c, long width, long avg, lt_measure m, void *ctx,
+                   const lt_content *old, const lt_line *ol, lt_ulong on, lt_ulong keep,
+                   lt_line **out, lt_ulong *n)
+{
+    lt_line *a = NULL;
+    lt_ulong cnt = 0, cap = 0, p = keep, i, k;
+    if (!old || !ol || !on || !keep) return lt_layout(c, width, avg, m, ctx, out, n);
+    if (p > c->len) p = c->len;
+    if (p > old->len) p = old->len;
+    while (p && c->text[p - 1] != '\n') p--;
+    /* A block that differs, or that goes on past p, is laid out again from
+       its start: a Right block's lines all move with its widest. */
+    for (i = 0; i < c->nblocks || i < old->nblocks; i++) {
+        const lt_block *nb = i < c->nblocks ? &c->blocks[i] : NULL;
+        const lt_block *obk = i < old->nblocks ? &old->blocks[i] : NULL;
+        lt_ulong s = nb && obk ? (nb->start < obk->start ? nb->start : obk->start) : nb ? nb->start : obk->start;
+        if (s >= p) break;
+        if (!nb || !obk || !same_block(nb, obk) || nb->start + nb->length >= p) { p = s; break; }
+    }
+    if (!p) return lt_layout(c, width, avg, m, ctx, out, n);
+    /* Old lines before p are the same lines. */
+    for (k = 0; k < on && ol[k].start < p; k++) ;
+    cap = k + 32;
+    if (!(a = (lt_line *)lt_alloc(sizeof *a * cap))) return 0;
+    memcpy(a, ol, sizeof *a * k);
+    cnt = k;
+    if (!wrap_from(c, width, avg, m, ctx, p, &a, &cnt, &cap)) { lt_free(a); return 0; }
+    *out = a;
+    *n = cnt;
+    return 1;
 }
 
 int lt_block_box(const lt_content *c, const lt_line *l, lt_ulong nl, lt_ulong b,
@@ -319,10 +373,63 @@ int lt_block_box(const lt_content *c, const lt_line *l, lt_ulong nl, lt_ulong b,
     *last = i;
     if (avg < 1) avg = 1;
     pad = avg / 2;
+    if (c->blocks[b].flags & LT_BLOCK_PAD)
+        pad = (long)(c->blocks[b].padx > LT_PAD_MAX ? LT_PAD_MAX : c->blocks[b].padx) * avg / 8;
     lt_block_area(&c->blocks[b], width, avg, &left, &area);
     *x0 = (c->blocks[b].flags & LT_BLOCK_RIGHT ? l[*first].x : left) - pad;
     *x1 = left + area + pad;
     return 1;
+}
+
+void lt_heights(lt_line *l, lt_ulong n, long lineh, long empty)
+{
+    lt_ulong i;
+    long y = 0;
+    if (lineh < 1) lineh = 1;
+    if (empty < 1 || empty > lineh) empty = lineh;
+    for (i = 0; i < n; i++) {
+        l[i].y = y;
+        l[i].h = l[i].len ? lineh : empty;
+        y += l[i].h;
+    }
+}
+
+lt_ulong lt_last_top(const lt_line *l, lt_ulong n, long height)
+{
+    lt_ulong k;
+    long sum;
+    if (!n) return 0;
+    k = n - 1;
+    sum = l[k].h;
+    while (k > 0 && sum + l[k - 1].h <= height) sum += l[--k].h;
+    return k;
+}
+
+lt_ulong lt_fit_lines(const lt_line *l, lt_ulong n, lt_ulong first, long height)
+{
+    lt_ulong k = 0;
+    long sum = 0;
+    while (first + k < n && sum + l[first + k].h <= height) sum += l[first + k++].h;
+    return k ? k : 1;
+}
+
+lt_ulong lt_line_at_y(const lt_line *l, lt_ulong n, lt_ulong first, long dy)
+{
+    lt_ulong i;
+    long top;
+    if (first >= n) return n;
+    top = l[first].y;
+    for (i = first; i < n; i++)
+        if (dy < l[i].y - top + l[i].h) return i;
+    return n;
+}
+
+long lt_block_pady(const lt_block *b, long lineh)
+{
+    lt_ulong p;
+    if (!(b->flags & LT_BLOCK_PAD)) return 0;
+    p = b->pady > 8 ? 8 : b->pady;
+    return (long)p * lineh / 8;
 }
 
 lt_ulong lt_line_of(const lt_line *l, lt_ulong n, lt_ulong off)

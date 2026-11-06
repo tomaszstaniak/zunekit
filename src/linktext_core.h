@@ -25,7 +25,7 @@ typedef struct {
 
 /* What the class gives; mirrors struct MUI_LinktextBlock. */
 typedef struct {
-    lt_ulong start, length, flags, indent, rindent, background;
+    lt_ulong start, length, flags, indent, rindent, background, padx, pady;
 } lt_block_in;
 
 typedef lt_block_in lt_block;
@@ -51,11 +51,15 @@ enum { LT_OK, LT_RANGE, LT_ORDER, LT_TARGET, LT_TOOLARGE, LT_NOMEM };
 #define LT_FIXED       2UL
 #define LT_DIM         4UL
 #define LT_NOUNDERLINE 8UL
+#define LT_ACCENT      16UL
+#define LT_SHADE       32UL
 #define LT_FONT_FLAGS  (LT_BOLD | LT_FIXED)
-#define LT_SPAN_FLAGS  (LT_BOLD | LT_FIXED | LT_DIM | LT_NOUNDERLINE)
+#define LT_SPAN_FLAGS  (LT_BOLD | LT_FIXED | LT_DIM | LT_NOUNDERLINE | LT_ACCENT | LT_SHADE)
 /* Block flags, the same numbers as MUIV_Linktext_Block_*. */
 #define LT_BLOCK_RIGHT 1UL
 #define LT_BLOCK_FILL  2UL
+#define LT_BLOCK_PAD   4UL
+#define LT_PAD_MAX     64UL    /* PadX, in eighths of a character */
 
 /* Provided by the build: memory, so that the class needs no C library and
    the tests can fail any allocation. */
@@ -86,6 +90,7 @@ typedef struct {
     lt_ulong shown;  /* bytes that are drawn: len without those spaces */
     long x;          /* pixels from the column's left                 */
     long block;      /* the block it is in, -1 for none               */
+    long y, h;       /* pixels from the text's top, height: lt_heights */
 } lt_line;
 
 /* Wraps to a column `width` pixels wide: *out is a new array of *n lines,
@@ -95,15 +100,40 @@ typedef struct {
 int lt_layout(const lt_content *c, long width, long avg, lt_measure m, void *ctx,
               lt_line **out, lt_ulong *n);
 
+/* The same as lt_layout for c, reusing the lines `ol` (on of them) that
+   lt_layout made for `old` at the same width and avg: the paragraphs
+   before the first `keep` bytes' last paragraph start (lt_common_prefix)
+   are not wrapped again. Blocks that differ, or reach into the rest, are
+   laid out again from their start. A text growing at its end costs its
+   last paragraphs, not the whole text. */
+int lt_layout_keep(const lt_content *c, long width, long avg, lt_measure m, void *ctx,
+                   const lt_content *old, const lt_line *ol, lt_ulong on, lt_ulong keep,
+                   lt_line **out, lt_ulong *n);
+
+/* Heights and places of laid-out lines: `lineh` each, an empty paragraph
+   `empty` (1..lineh). */
+void lt_heights(lt_line *l, lt_ulong n, long lineh, long empty);
+/* The first line that can be at the top with the last line still whole in
+   `height` pixels. */
+lt_ulong lt_last_top(const lt_line *l, lt_ulong n, long height);
+/* Whole lines from `first` that fit in `height` pixels, at least 1. */
+lt_ulong lt_fit_lines(const lt_line *l, lt_ulong n, lt_ulong first, long height);
+/* The line at `dy` pixels below the top of line `first`; n when past the
+   last line. */
+lt_ulong lt_line_at_y(const lt_line *l, lt_ulong n, lt_ulong first, long dy);
+
 /* A block's area in the column: *left and *width in pixels. Its paragraphs
    wrap to that width, which is at least one character. */
 void lt_block_area(const lt_block *b, long width, long avg, long *left, long *area);
 
 /* The box behind block `b`, laid out by lt_layout with the same width and
    avg: lines *first..*last, pixels *x0..*x1 (x1 excluded) from the column's
-   left. 0 when the block has no lines. */
+   left. 0 when the block has no lines. Its vertical room, in pixels for a
+   line `lineh` high: lt_block_pady. */
 int lt_block_box(const lt_content *c, const lt_line *l, lt_ulong nl, lt_ulong b,
                  long width, long avg, lt_ulong *first, lt_ulong *last, long *x0, long *x1);
+
+long lt_block_pady(const lt_block *b, long lineh);
 
 long lt_width(const lt_content *c, lt_ulong start, lt_ulong n, lt_measure m, void *ctx);
 

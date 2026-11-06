@@ -443,7 +443,7 @@ static void fixed_widths(void)
     memset(one, 0, sizeof one);
     s[0].start = 0; s[0].length = 3; s[0].flags = LT_FIXED;
     s[1].start = 4; s[1].length = 2; s[1].flags = LT_FIXED | LT_BOLD;
-    s[2].start = 7; s[2].length = 4; s[2].flags = LT_DIM | LT_NOUNDERLINE | 0x10; s[2].target = "https://t";
+    s[2].start = 7; s[2].length = 4; s[2].flags = LT_DIM | LT_NOUNDERLINE | 0x40; s[2].target = "https://t";
     c = mk("abc de link x", s, 3);
     OK(lt_width(c, 0, 13, font, NULL) == 30 + 8 + 22 + 8 + 32 + 16);
     OK(lt_width(c, 1, 4, font, NULL) == 20 + 8 + 11);
@@ -547,6 +547,164 @@ static void kept_across_changes(void)
     OK(live == 0);
 }
 
+/* Short empty paragraphs and padded boxes (the document look, 2026-11-06). */
+static void heights_and_padding(void)
+{
+    lt_block_in b[1];
+    lt_line *l = NULL;
+    lt_ulong n = 0, f0, f1;
+    long x0, x1;
+    lt_content *c;
+    /* "ab", empty, "cd", empty, "ef": lines 16 high, empty ones 6. */
+    c = mkdoc("ab\n\ncd\n\nef", NULL, 0, NULL, 0);
+    OK(lt_layout(c, 80, 8, font, NULL, &l, &n) && n == 5);
+    OK(l[3].y == 3 && l[3].h == 1);                  /* units until lt_heights */
+    lt_heights(l, n, 16, 6);
+    OK(l[0].y == 0 && l[0].h == 16 && l[1].y == 16 && l[1].h == 6);
+    OK(l[2].y == 22 && l[3].h == 6 && l[4].y == 44 && l[4].h == 16);
+    /* What fits: from line 0 in 40 pixels, 16+6+16 = 38, three lines. */
+    OK(lt_fit_lines(l, n, 0, 40) == 3);
+    OK(lt_fit_lines(l, n, 4, 5) == 1);              /* always at least one */
+    /* The last top keeping "ef" whole in 40: 16+6+16 from line 2. */
+    OK(lt_last_top(l, n, 40) == 2);
+    OK(lt_last_top(l, n, 1000) == 0);
+    OK(lt_last_top(l, n, 3) == 4);
+    /* Pixels below the top of line 1 (the empty one): 0..5 is line 1, 6 is line 2. */
+    OK(lt_line_at_y(l, n, 1, 0) == 1 && lt_line_at_y(l, n, 1, 5) == 1 && lt_line_at_y(l, n, 1, 6) == 2);
+    OK(lt_line_at_y(l, n, 1, 1000) == n);
+    /* out of range values are a whole line */
+    lt_heights(l, n, 16, 0);
+    OK(l[1].h == 16);
+    lt_heights(l, n, 16, 40);
+    OK(l[1].h == 16);
+    lt_free(l);
+    lt_content_unref(c);
+
+    /* A padded box: PadX 12 eighths of 8 pixels is 12 pixels each side;
+       PadY 3 eighths of a 16-pixel line is 6 pixels. Without Pad, half a
+       character and no vertical room, as before. */
+    b[0] = blk(0, 2, LT_BLOCK_FILL | LT_BLOCK_PAD, 2, 2);
+    b[0].padx = 12; b[0].pady = 3;
+    c = mkdoc("ab\n\ncd", NULL, 0, b, 1);
+    OK(lt_layout(c, 80, 8, font, NULL, &l, &n) && n == 3);
+    OK(lt_block_box(c, l, n, 0, 80, 8, &f0, &f1, &x0, &x1) && f0 == 0 && f1 == 0);
+    OK(x0 == 16 - 12 && x1 == 64 + 12);
+    OK(lt_block_pady(&c->blocks[0], 16) == 6);
+    c->blocks[0].pady = 99;                         /* at most a line */
+    OK(lt_block_pady(&c->blocks[0], 16) == 16);
+    c->blocks[0].padx = 1000;                       /* at most LT_PAD_MAX */
+    OK(lt_block_box(c, l, n, 0, 80, 8, &f0, &f1, &x0, &x1) && x0 == 16 - 64);
+    c->blocks[0].flags = LT_BLOCK_FILL;
+    OK(lt_block_pady(&c->blocks[0], 16) == 0);
+    OK(lt_block_box(c, l, n, 0, 80, 8, &f0, &f1, &x0, &x1) && x0 == 16 - 4 && x1 == 64 + 4);
+    lt_free(l);
+    lt_content_unref(c);
+    /* The accent is a span flag the class keeps. */
+    {
+        lt_span_in s = { 0, 2, LT_ACCENT | LT_BOLD, NULL, 0 };
+        lt_ulong fl = 0;
+        c = mk("abcd", &s, 1);
+        OK(lt_layout(c, 80, 8, font, NULL, &l, &n) && n == 1);
+        OK(lt_run(c, &l[0], 0, 0, 0, &fl) == 2 && (fl & LT_ACCENT) && (fl & LT_BOLD));
+        lt_free(l);
+        lt_content_unref(c);
+    }
+    OK(live == 0);
+}
+
+/* Reusing lines (lt_layout_keep) gives exactly what lt_layout gives, for
+   texts that grow, change in the middle, gain or lose blocks. */
+static int same_lines(const lt_line *a, lt_ulong na, const lt_line *b, lt_ulong nb)
+{
+    lt_ulong i;
+    if (na != nb) return 0;
+    for (i = 0; i < na; i++)
+        if (a[i].start != b[i].start || a[i].len != b[i].len || a[i].shown != b[i].shown
+            || a[i].x != b[i].x || a[i].block != b[i].block) return 0;
+    return 1;
+}
+
+static void keep_layout(void)
+{
+    static const char *words[] = { "a", "bb", "ccc", "dddd word", "x", "\n", "\n\n", "longerword", " " };
+    unsigned seed = 7;
+    int round;
+    for (round = 0; round < 400; round++) {
+        char t1[400], t2[400];
+        lt_block_in b1[4], b2[4];
+        lt_ulong nb1 = 0, nb2 = 0, n1 = 0, n2 = 0, nk = 0, keep;
+        lt_line *l1 = NULL, *l2 = NULL, *lk = NULL;
+        lt_content *c1, *c2;
+        size_t len = 0, cut;
+        int i;
+        t1[0] = 0;
+        for (i = 0; i < 30; i++) {
+            seed = seed * 1103515245u + 12345u;
+            strcat(t1, words[(seed >> 8) % 9]);
+        }
+        len = strlen(t1);
+        /* the second text: the first up to a point, then something else */
+        seed = seed * 1103515245u + 12345u;
+        cut = (seed >> 8) % (len + 1);
+        memcpy(t2, t1, cut);
+        t2[cut] = 0;
+        for (i = 0; i < 8; i++) {
+            seed = seed * 1103515245u + 12345u;
+            strcat(t2, words[(seed >> 8) % 9]);
+        }
+        /* blocks on whole paragraphs: every other paragraph of each text */
+        {
+            const char *tt[2] = { t1, t2 };
+            lt_block_in *bb[2] = { b1, b2 };
+            lt_ulong *nn[2] = { &nb1, &nb2 };
+            int k;
+            for (k = 0; k < 2; k++) {
+                const char *t = tt[k];
+                size_t s = 0, e, L = strlen(t);
+                int para = 0;
+                while (s <= L && *nn[k] < 4) {
+                    const char *q = strchr(t + s, '\n');
+                    e = q ? (size_t)(q - t) : L;
+                    if (para % 2 == 1) {
+                        lt_block_in *x = &bb[k][(*nn[k])++];
+                        memset(x, 0, sizeof *x);
+                        x->start = s; x->length = e - s;
+                        x->flags = (para % 4 == 1 ? LT_BLOCK_RIGHT : 0) | LT_BLOCK_FILL;
+                        x->indent = 2; x->rindent = 1;
+                    }
+                    para++;
+                    if (!q) break;
+                    s = e + 1;
+                }
+            }
+        }
+        c1 = mkdoc(t1, NULL, 0, b1, nb1);
+        c2 = mkdoc(t2, NULL, 0, b2, nb2);
+        OK(c1 && c2);
+        OK(lt_layout(c1, 64, 8, font, NULL, &l1, &n1));
+        OK(lt_layout(c2, 64, 8, font, NULL, &l2, &n2));
+        keep = lt_common_prefix(c1, c2);
+        OK(lt_layout_keep(c2, 64, 8, font, NULL, c1, l1, n1, keep, &lk, &nk));
+        OK(same_lines(l2, n2, lk, nk));
+        lt_free(l1); lt_free(l2); lt_free(lk);
+        lt_content_unref(c1); lt_content_unref(c2);
+    }
+    /* a failed allocation: nothing out, nothing kept */
+    {
+        lt_content *c1 = mkdoc("one two\nthree", NULL, 0, NULL, 0), *c2 = mkdoc("one two\nthree four", NULL, 0, NULL, 0);
+        lt_line *l1 = NULL, *lk = (lt_line *)1;
+        lt_ulong n1 = 0, nk = 99;
+        OK(lt_layout(c1, 64, 8, font, NULL, &l1, &n1));
+        fail_after = 0;
+        OK(!lt_layout_keep(c2, 64, 8, font, NULL, c1, l1, n1, lt_common_prefix(c1, c2), &lk, &nk));
+        fail_after = -1;
+        OK(lk == (lt_line *)1 && nk == 99);
+        lt_free(l1);
+        lt_content_unref(c1); lt_content_unref(c2);
+    }
+    OK(live == 0);
+}
+
 int main(void)
 {
     validation();
@@ -564,6 +722,8 @@ int main(void)
     document_allocation_failures();
     reference_outlives_replacement();
     kept_across_changes();
+    heights_and_padding();
+    keep_layout();
     printf("linktext core: %d checks passed\n", checks);
     return 0;
 }

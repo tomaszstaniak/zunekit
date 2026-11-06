@@ -5,6 +5,10 @@
 #include <libraries/mui.h>
 #include "linktext_core.h"
 
+/* The scroller's position in pixels from the text's top: set by the
+   scroller's notification only (lines are not all of one height). */
+#define LT_SCROLL_PX (MUIB_Linktext | 0x7f)
+
 struct Linktext_DATA
 {
     lt_content *content;
@@ -19,6 +23,12 @@ struct Linktext_DATA
     struct TextFont *fixed;      /* between Setup and Cleanup          */
     Object *fixed_obj;           /* what holds `fixed` open            */
     UWORD dim_pen;               /* MPEN_* for Span_Dim                */
+    ULONG empty8;                /* empty paragraph, eighths of a line  */
+    ULONG rgb[4];                /* text, dim, accent, shade: MUIV_Linktext_RGB or 0 */
+    LONG pen[4];                 /* obtained for them, -1 none         */
+    struct { ULONG rgb; LONG pen; } bg[8];   /* block backgrounds obtained */
+    ULONG nbg;
+    BOOL setup;                  /* between Setup and Cleanup          */
     LONG dirty_first, dirty_last;
 
     struct Hook *hook;

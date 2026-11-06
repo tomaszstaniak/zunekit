@@ -40,7 +40,8 @@
 /* [I..] BOOL: exactly MUIA_Linktext_Lines high instead of stretching. */
 #define MUIA_Linktext_FixHeight  (MUIB_Linktext | 0x03)
 /* [I..] Object *: a Scrollbar or Prop to keep in step, as
-   MUIA_TextEditor_Slider. Not disposed by this class. */
+   MUIA_TextEditor_Slider. Not disposed by this class. The class sets its
+   Entries, Visible and First in pixels, and DeltaFactor to a line. */
 #define MUIA_Linktext_Scroller   (MUIB_Linktext | 0x04)
 /* [.SG] ULONG: the wrapped line at the top. Set, it is kept within
    0..LineCount - Visible, so ~0UL goes to the end. */
@@ -57,10 +58,33 @@
    that shows its last line when it is made smaller or larger keeps showing
    it. */
 #define MUIA_Linktext_Visible    (MUIB_Linktext | 0x08)
+/* [ISG] ULONG: the height of an empty paragraph, in eighths of a line,
+   1..8; default 8, a whole line. Less makes the room between paragraphs
+   smaller than a line of text. Lines are then not all of one height:
+   First, LineCount and Visible still count lines. */
+#define MUIA_Linktext_EmptyLine  (MUIB_Linktext | 0x09)
+/* [ISG] ULONG: colours of the text, of Span_Dim text and of Span_Accent
+   text and links, each MUIV_Linktext_RGB(0xrrggbb) or 0 for the pen the
+   class takes from the user's settings (text, a half pen, text). The
+   class obtains the nearest pens on the screen at Setup. Set a background
+   to match (MUIA_Background "2:..." for the area, block Background for
+   boxes): a colour chosen for one settings scheme may be unreadable on
+   another. */
+#define MUIA_Linktext_TextColor   (MUIB_Linktext | 0x0A)
+#define MUIA_Linktext_DimColor    (MUIB_Linktext | 0x0B)
+#define MUIA_Linktext_AccentColor (MUIB_Linktext | 0x0C)
+/* [ISG] ULONG: the box behind Span_Shade text, as the colours above; 0 is
+   the half shine pen. */
+#define MUIA_Linktext_ShadeColor  (MUIB_Linktext | 0x0D)
+
+/* A colour in 0xrrggbb, for the colour attributes and block Background. */
+#define MUIV_Linktext_RGB(rgb) (0x80000000UL | ((ULONG)(rgb) & 0xffffffUL))
 
 /* Replaces the whole content, at once or not at all; returns a
    MUIV_Linktext_Status_*. On any failure the content shown before stays
    and nothing changes. The object copies text and targets during the call.
+   Only the paragraphs from the first byte that differs from the content
+   shown are wrapped again, so a text growing at its end costs its end.
    First stays the same line number, within the new LineCount. What lies
    in the bytes the old and the new text start with stays: the selection,
    a drag making one, a pressed link and the keyboard's link (when the
@@ -119,6 +143,8 @@ struct MUIP_Linktext_SetDocument
 #define MUIV_Linktext_Span_Fixed       2  /* the user's fixed-width font     */
 #define MUIV_Linktext_Span_Dim         4  /* a quieter pen, for secondary text */
 #define MUIV_Linktext_Span_NoUnderline 8  /* a link drawn without its line    */
+#define MUIV_Linktext_Span_Accent     16  /* in the accent colour              */
+#define MUIV_Linktext_Span_Shade      32  /* on a box in the shade colour: code */
 
 struct MUI_LinktextSpan
 {
@@ -145,9 +171,13 @@ struct MUI_LinktextSpan
    Fill, a box in the Background pen lies behind the block's lines, half an
    average character wider on each side: across the whole area, or with
    Right only across the lines. Empty paragraphs inside a block give it
-   room above and below. */
+   room above and below. With Pad, the box is PadX eighths of an average
+   character wider on each side instead of half of one, and PadY eighths
+   of a line (at most 8) taller above and below: into the lines next to
+   the block, which should then be empty paragraphs. */
 #define MUIV_Linktext_Block_Right 1   /* the block at the area's right  */
 #define MUIV_Linktext_Block_Fill  2   /* a box in Background behind it  */
+#define MUIV_Linktext_Block_Pad   4   /* the box's room is PadX and PadY */
 
 struct MUI_LinktextBlock
 {
@@ -156,7 +186,9 @@ struct MUI_LinktextBlock
     ULONG Flags;          /* MUIV_Linktext_Block_*                            */
     ULONG Indent;         /* left, in average characters                      */
     ULONG RightIndent;    /* right, in average characters                     */
-    ULONG Background;     /* with Fill: MPEN_* + 1; 0 is MPEN_HALFSHINE     */
+    ULONG Background;     /* with Fill: MPEN_* + 1, or MUIV_Linktext_RGB();
+                             0 is MPEN_HALFSHINE                           */
+    ULONG PadX, PadY;     /* with Pad: eighths of a character, of a line   */
 };
 
 #define MUIV_Linktext_Action_Open 1  /* click, Return, menu                  */
