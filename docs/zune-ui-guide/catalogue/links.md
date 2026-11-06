@@ -1,6 +1,6 @@
 ---
 type: reference
-updated: 2026-11-01
+updated: 2026-11-06
 title: Links in text
 group: text
 status: draft
@@ -59,6 +59,36 @@ DoMethod(view, MUIM_Linktext_SetContent,
 - The class copies the text and the targets during the call. A target is any non-empty text and stays exact: a final `!`, `;`, `?`, `'` or `.` is part of it.
 - Limits are explicit: 64 MiB of text, 1000000 spans, 16 MiB per target. Over a limit the status is `MUIV_Linktext_Status_TooLarge`. There is no limit on how many links are shown or on how they are placed.
 
+### Documents: paragraph blocks and quieter text
+
+`MUIM_Linktext_SetDocument` is `SetContent` with paragraph blocks, for a view such as a conversation: messages in a box at the right, code in a filled box, secondary lines quieter. It takes the same text and spans, the same statuses and the same all-or-nothing rule.
+
+- A block covers whole paragraphs: it starts at a paragraph's start and ends at a paragraph's end. Blocks come in text order and do not overlap. Paragraphs outside every block are laid out as before.
+- `Indent` and `RightIndent` are in average characters of the normal font, so they follow the user's font. Lines wrap to the block's area.
+- `MUIV_Linktext_Block_Right` puts the block's lines together at the right of its area, as wide as its longest line. `MUIV_Linktext_Block_Fill` draws a box behind them in `Background` (an `MPEN_*` value plus one; 0 is `MPEN_HALFSHINE`). An empty paragraph inside a block gives it room above or below.
+- Span flags add `MUIV_Linktext_Span_Fixed` (the user's fixed-width font, for code), `MUIV_Linktext_Span_Dim` (a quieter pen for secondary text, chosen against the list background) and `MUIV_Linktext_Span_NoUnderline` (a link that reads as a line of its own, such as a tool line that opens its result).
+- `MUIA_Linktext_MaxColumns` limits the text column to a number of average characters and keeps it at the centre of a wider object. Use it for reading width; the object still fills its space.
+
+### Replacing the content
+
+A view that grows while the user reads it, such as a reply that streams in, replaces the whole content each time. The class keeps what the user is doing where it can:
+
+- `First` stays the same line number, within the new line count.
+- What lies in the bytes the old and the new text start with stays: the selection, a drag that is making one, a pressed link and the keyboard's link, when it is the same link at the same place with the same target. Text that grows at the end therefore keeps them. A change before them clears them.
+- To follow the end, read `First`, `MUIA_Linktext_Visible` and `MUIA_Linktext_LineCount` before replacing: the view is at the end when `First + Visible >= LineCount`. After replacing, set `First` to `~0UL`, which goes to the last page.
+- A view that shows its last line keeps showing it when it is made smaller or larger, for example when a panel opens below it.
+
+The class copies and wraps the whole text at each replacement, so the cost grows with the text. In Bishop on AROS One 1.3 in QEMU, building and replacing a 47 KB conversation took at most 44 ms, and 6 ms on average over the session. For a much longer text, give the class only the part the user can reach.
+
+### When memory runs out
+
+Every replacement is whole or not at all. `SetContent` and `SetDocument` return `MUIV_Linktext_Status_NoMemory` with the old content still shown, its selection and position unchanged. An application that must not act on text the user has not seen checks the status: a permission request, for example, should allow its Allow button only after its own text was set.
+
+### Encoding and fonts
+
+- Offsets count bytes of the 8-bit text the class is given. Convert UTF-8 to the system's character set first, for example with codesets.library, and keep the UTF-8 original for copying and saving: the class copies its own 8-bit text.
+- The normal font is the object's (`MUIA_Font`, the list font by default). Bold is that font's bold style. The fixed-width font is the user's fixed font from the MUI settings, opened at `MUIM_Setup` and closed at `MUIM_Cleanup`; when it cannot be opened, fixed spans use the normal font.
+
 ### Actions
 
 `MUIA_Linktext_ActionHook` gets a `struct MUI_LinktextAction`: open or copy, the link's number, its ID and its target.
@@ -90,6 +120,7 @@ Links use the text pen with an underline, in the user's font. The Mark pen is no
 |---|---|
 | Floattext, Urltext, TextEditor | Existing classes, described above |
 | `zk_linktext` in zunekit | Implemented; host tests of the text logic; run on mainline x86_64, ABIv11 2026.09 and AROS One 1.3 |
-| PkgManager | Uses it compiled in; not yet in a release |
+| Blocks, fixed and quieter spans, column limit, kept selection and end (zunekit) | Implemented; host tests; run on AROS One 1.3 in Bishop's window. Not part of the class offered to AROS yet: it needs the AROS build at an exact revision and a run on mainline first |
+| PkgManager, Bishop | Use it compiled in; not yet in a release |
 | `Linktext.mcc` in AROS | Built through mmake and run on mainline x86_64; offered upstream, not accepted. Attribute numbers are a proposal until then |
 | Raspberry Pi | Compiled into PkgManager; not run |
