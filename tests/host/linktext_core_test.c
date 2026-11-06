@@ -520,6 +520,33 @@ static void reference_outlives_replacement(void)
     OK(live == 0);
 }
 
+/* SetDocument keeps a selection or a link that lies in the bytes both
+   contents start with (a reply growing at the end). */
+static void kept_across_changes(void)
+{
+    lt_span_in s[2];
+    lt_content *a, *b, *c, *e;
+    int st;
+    memset(s, 0, sizeof s);
+    s[0].start = 0; s[0].length = 4; s[0].target = "t1";
+    s[1].start = 10; s[1].length = 3; s[1].target = "t2";
+    a = mk("link and more text", s, 2);
+    b = mk("link and more text, and then some", s, 2);     /* grown at the end */
+    OK(lt_common_prefix(a, b) == 18 && lt_common_prefix(b, a) == 18);
+    OK(lt_same_link(a, b, 0, 18) && lt_same_link(a, b, 1, 18));
+    OK(!lt_same_link(a, b, 1, 12));                         /* ends past what is kept */
+    OK(!lt_same_link(a, b, 2, 18) && !lt_same_link(a, b, -1, 18));
+    s[1].target = "t3";
+    c = mk("link and more text", s, 2);                     /* the same text, a target changed */
+    OK(lt_common_prefix(a, c) == 18 && lt_same_link(a, c, 0, 18) && !lt_same_link(a, c, 1, 18));
+    e = lt_content_new("", 0, NULL, 0, &st);                /* emptied: nothing kept */
+    OK(e && lt_common_prefix(a, e) == 0 && !lt_same_link(a, e, 0, 0));
+    c->text[2] = 'X';                                       /* changed early */
+    OK(lt_common_prefix(a, c) == 2 && !lt_same_link(a, c, 0, 2));
+    lt_content_unref(a); lt_content_unref(b); lt_content_unref(c); lt_content_unref(e);
+    OK(live == 0);
+}
+
 int main(void)
 {
     validation();
@@ -536,6 +563,7 @@ int main(void)
     fixed_widths();
     document_allocation_failures();
     reference_outlives_replacement();
+    kept_across_changes();
     printf("linktext core: %d checks passed\n", checks);
     return 0;
 }

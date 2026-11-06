@@ -376,6 +376,24 @@ const lt_span *lt_link(const lt_content *c, lt_ulong link)
     return link < c->nlinks ? &c->spans[c->links[link]] : NULL;
 }
 
+lt_ulong lt_common_prefix(const lt_content *a, const lt_content *b)
+{
+    lt_ulong n = a->len < b->len ? a->len : b->len, i = 0;
+    while (i < n && a->text[i] == b->text[i]) i++;
+    return i;
+}
+
+int lt_same_link(const lt_content *a, const lt_content *b, long link, lt_ulong upto)
+{
+    const lt_span *x, *y;
+    if (link < 0) return 0;
+    x = lt_link(a, (lt_ulong)link);
+    y = lt_link(b, (lt_ulong)link);
+    if (!x || !y) return 0;
+    return x->start == y->start && x->length == y->length && x->start + x->length <= upto
+        && x->target_len == y->target_len && !memcmp(x->target, y->target, x->target_len);
+}
+
 long lt_link_step(const lt_content *c, long cur, int dir)
 {
     long next;

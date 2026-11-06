@@ -59,8 +59,11 @@
 /* Replaces the whole content, at once or not at all; returns a
    MUIV_Linktext_Status_*. On any failure the content shown before stays
    and nothing changes. The object copies text and targets during the call.
-   First stays the same line number, within the new LineCount; the
-   selection and the keyboard's link are cleared. */
+   First stays the same line number, within the new LineCount. What lies
+   in the bytes the old and the new text start with stays: the selection,
+   a drag making one, a pressed link and the keyboard's link (when the
+   same link is at the same place with the same target). So a text that
+   grows at the end keeps them; one that changes before them clears them. */
 #define MUIM_Linktext_SetContent (MUIB_Linktext | 0x10)
 struct MUIP_Linktext_SetContent
 {

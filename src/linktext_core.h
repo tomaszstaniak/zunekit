@@ -117,6 +117,14 @@ lt_ulong lt_line_of(const lt_line *l, lt_ulong n, lt_ulong off);
 long lt_hit(const lt_content *c, const lt_line *line, long x, lt_measure m, void *ctx,
             lt_ulong *caret);
 
+/* What a new content keeps of the old one, for SetDocument: the bytes at
+   the start that are the same in both. A selection that ends there, or a
+   link wholly in them that lt_same_link finds again, survives the change. */
+lt_ulong lt_common_prefix(const lt_content *a, const lt_content *b);
+/* Link `link` of a is link `link` of b: the same place, length and target,
+   ending within the first `upto` bytes. */
+int lt_same_link(const lt_content *a, const lt_content *b, long link, lt_ulong upto);
+
 /* The link at byte `off`, counted in text order; -1 for none. */
 long lt_link_at(const lt_content *c, lt_ulong off);
 const lt_span *lt_link(const lt_content *c, lt_ulong link);

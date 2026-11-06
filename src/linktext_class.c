@@ -713,17 +713,29 @@ IPTR Linktext__MUIM_Linktext_SetDocument(Class *cl, Object *obj, struct MUIP_Lin
         }
         use_font(&r, 0);
     }
-    if (d->pressed) cancel_press(d, obj);
-    lt_content_unref(d->content);
-    lt_free(d->lines);
-    d->content = c;
-    d->lines = lines;
-    d->nlines = n;
-    d->laid_w = lines ? column_width(d, obj) : -1;
-    if (lines) clamp_first(d, obj);
-    d->sel_anchor = d->sel_caret = 0;
-    d->focus = -1;
-    d->press_link = -1;
+    /* What lies in the bytes both texts start with stays: a selection, a
+       drag that makes one, the press on a link and the keyboard's link (a
+       reply growing at the end under a selection). The rest is reset. */
+    {
+        lt_ulong keep = d->content ? lt_common_prefix(d->content, c) : 0;
+        ULONG sel_end = d->sel_anchor > d->sel_caret ? d->sel_anchor : d->sel_caret;
+        BOOL keep_sel = sel_end <= keep;
+        BOOL keep_press = d->pressed && (d->press_link >= 0
+                              ? lt_same_link(d->content, c, d->press_link, keep)
+                              : d->press_caret <= keep && keep_sel);
+        BOOL keep_focus = d->focus >= 0 && lt_same_link(d->content, c, d->focus, keep);
+        if (d->pressed && !keep_press) cancel_press(d, obj);
+        lt_content_unref(d->content);
+        lt_free(d->lines);
+        d->content = c;
+        d->lines = lines;
+        d->nlines = n;
+        d->laid_w = lines ? column_width(d, obj) : -1;
+        if (lines) clamp_first(d, obj);
+        if (!keep_sel) d->sel_anchor = d->sel_caret = 0;
+        if (!keep_focus) d->focus = -1;
+        if (!keep_press) d->press_link = -1;
+    }
     update_prop(d, obj);
     if (d->shown) MUI_Redraw(obj, MADF_DRAWOBJECT);
     return MUIV_Linktext_Status_OK;
