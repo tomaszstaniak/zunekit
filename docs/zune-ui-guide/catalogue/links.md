@@ -1,0 +1,95 @@
+---
+type: reference
+updated: 2026-11-01
+title: Links in text
+group: text
+status: draft
+classes: "Urltext (Z); TextEditor (Z); Linktext (zunekit, proposed for Zune)"
+summary: "What Zune offers for links, and Linktext, which puts links inside wrapped text."
+---
+
+# Links in text
+
+Use a separate link control when an address stands on its own, such as a line in an About window. Use Linktext when links belong inside sentences, or when text should stay one scrolling paragraph with its addresses in place. A read-only TextEditor with a double-click hook suits a program that already shows text in TextEditor and can accept a double click.
+
+## What Zune has
+
+| Class | What it does | Links inside text |
+|---|---|---|
+| `Floattext.mui` | Wraps text through List | No link ranges and no event |
+| `Urltext.mcc` (contrib) | One address as one object, with its own opening through OpenURL | Not inside a paragraph; it keeps 255 characters of the address and opens on the application's task |
+| `TextEditor.mcc` 15.45 | Editor with `MUIA_TextEditor_ReadOnly` and `MUIA_TextEditor_DoubleClickHook` | Yes, by double click; its autodoc shows opening an HTTP address from a line |
+
+Sources checked on 1 November 2026: AROS `master` `126b90d4cad7874b316e0bef3837d4f9eb7f0922` and deadwood2/AROS `master` `5b5fd4cfd4f039927c0d1bb9cdd7f4fc8644d23e` have the same TextEditor autodoc (blob `01bd68608f99`). [Floattext](https://github.com/aros-development-team/AROS/blob/master/workbench/libs/muimaster/classes/floattext.c), [TextEditor autodoc](https://github.com/aros-development-team/AROS/blob/master/workbench/classes/zune/texteditor/doc/MCC_TextEditor.doc), [TextEditor input handling](https://github.com/aros-development-team/AROS/blob/master/workbench/classes/zune/texteditor/mcc/HandleInput.c), [Urltext](https://github.com/aros-development-team/contrib/tree/master/workbench/classes/mui/urltext).
+
+## What the TextEditor path does
+
+A small program ran a read-only TextEditor 15.45 on mainline AROS and on ABIv11 2026.09. What it showed:
+
+- Position mapping across wrapping is correct. The hook and `MUIA_TextEditor_CursorX`/`CursorY` give the byte offset in the paragraph, whichever wrapped line was clicked.
+- The hook is called for a double click only. A single click has no notification.
+- TextEditor adds its event handler with its own class, so a subclass's `MUIM_HandleEvent` is never called. An extra handler at a higher priority does see the events, and can read the cursor at the release.
+- A click past the end of a line, or below the text, moves the cursor to the end of that line or text. An application therefore cannot tell a click on the last word of a line from a click beside it. The class has no call that gives the pixel position of a character.
+- In read-only mode the arrow keys and Return move nothing that could reach a link, so the keyboard has no way to a link. Dragging selects correctly.
+- A label with a separate target has to be matched by the application from the cursor offset, and the text styles come from TextEditor's own import codes.
+
+These are the reasons for a separate class. Changing TextEditor could add a single-click hook, but keyboard links, hit tests and spans would change an editor of about 17000 lines, a program could not carry that class inside itself, and existing users would gain nothing.
+
+## Linktext
+
+Linktext is a small read-only class on `MUIC_Area`. It is written in zunekit (`src/linktext*.c`), compiled into programs by `zk_linktext`, and offered to AROS as `Linktext.mcc`. An external class and the compiled-in form are the same source.
+
+The application gives plain text and explicit spans. A span covers bytes of the text and either makes them a link, when it has a target, or only sets their style. Linktext draws, wraps, scrolls, selects and reports. It does not look for addresses in the text and does not parse a target. It starts no browser, runs no Shell command and makes no network request.
+
+```c
+static const struct MUI_LinktextSpan spans[] = {
+    { 4, 15, 0, (CONST_STRPTR)"https://example.org/project", 1 },
+    { 24, 5, MUIV_Linktext_Span_Bold, NULL, 0 },
+};
+
+DoMethod(view, MUIM_Linktext_SetContent,
+         (IPTR)"See Project website and today.", ~0UL, (IPTR)spans, 2);
+```
+
+### Text and spans
+
+- Text is one byte per character in the system's 8-bit character set, as for `Text()` and Floattext. Offsets count those bytes. Convert UTF-8 first.
+- A newline ends a paragraph. Any other control character is shown as a space. No escape codes are interpreted.
+- `MUIM_Linktext_SetContent` replaces the content at once or not at all, and returns a status. Spans must lie inside the text, be at least one byte long, come in text order and not overlap, and a link's target must not be empty. Anything else is refused, with the old content kept.
+- The class copies the text and the targets during the call. A target is any non-empty text and stays exact: a final `!`, `;`, `?`, `'` or `.` is part of it.
+- Limits are explicit: 64 MiB of text, 1000000 spans, 16 MiB per target. Over a limit the status is `MUIV_Linktext_Status_TooLarge`. There is no limit on how many links are shown or on how they are placed.
+
+### Actions
+
+`MUIA_Linktext_ActionHook` gets a `struct MUI_LinktextAction`: open or copy, the link's number, its ID and its target.
+
+The hook runs on the application's task inside the object's event handling. `Target` stays valid until the hook returns, even if the hook replaces the content, because the class holds a reference to that content for the call. Copy it to keep it. The hook may replace the content and close the window. To dispose the object, push the disposal with `MUIM_Application_PushMethod`.
+
+For Copy, a hook that returns FALSE, or no hook, makes the class copy the target to clipboard unit 0 itself.
+
+### What the user can do
+
+- A click on a link opens it, at any wrapped fragment of the link. A click beside the text does nothing.
+- A drag selects text and opens nothing, also when it starts on a link. It scrolls when held past the edge.
+- The context menu opens or copies the link under the pointer, or copies the selection.
+- A bubble shows the whole target, broken into lines. It appears beside the pointer, not under it, so it does not take the next click.
+- With the object active, Left and Right go from link to link and bring the link into view, Return opens, Amiga+C copies the link or the selection, Up, Down and the page keys scroll, and Tab goes on to the next object. Tab cannot walk through the links because Zune's window handles it before any object.
+
+Links use the text pen with an underline, in the user's font. The Mark pen is not used: in stock settings it equals the list background. A selection uses the Fill and Shine pens. The wheel scrolls three lines.
+
+### Gaps
+
+- No word or line selection by double and triple click, and no selection with the keyboard.
+- Text is drawn with `Text()`, so there is no shaping and no right-to-left text. Fonts come from the MUI settings.
+- The menu's three labels are English.
+- Links have one look; visited links are not told apart.
+
+## Status
+
+| What | State |
+|---|---|
+| Floattext, Urltext, TextEditor | Existing classes, described above |
+| `zk_linktext` in zunekit | Implemented; host tests of the text logic; run on mainline x86_64, ABIv11 2026.09 and AROS One 1.3 |
+| PkgManager | Uses it compiled in; not yet in a release |
+| `Linktext.mcc` in AROS | Built through mmake and run on mainline x86_64; offered upstream, not accepted. Attribute numbers are a proposal until then |
+| Raspberry Pi | Compiled into PkgManager; not run |
