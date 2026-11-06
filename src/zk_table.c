@@ -23,6 +23,7 @@
 #include <clib/alib_protos.h>
 #include <aros/asmcall.h>
 #include "zk_table.h"
+#include "zk_dragout.h"
 
 #define RAWKEY_A   0x20
 #define DRAG_START 6               /* pixels moved before a press is a drag */
@@ -55,69 +56,12 @@ AROS_UFH3S(void, zk_display,
 
 /* ---- the drawer under the pointer ---- */
 
-/* The window under the pointer belongs to another program and can close at
- * any moment, so nothing of it is used after the locks are let go: its
- * owner's name and its title are copied while they are held, and the drawer
- * is checked on disk afterwards. intuition frees a closing window while it
- * holds the screen's LayerInfo lock (closewindow.c, LOCK_REFRESH), and the
- * window's port goes after that, so holding the lock from WhichLayer to the
- * last read keeps both. The port and the title are read under Forbid as
- * well: Zune takes a window's shared port away under Forbid before closing
- * it, and SetWindowTitles takes no lock at all. Wanderer titles a drawer
- * window with the drawer's path (iconwindow.c); workbench.library has no
- * call that says which drawer is open where (WBCTRLA_GetOpenDrawerList is not
- * implemented on AROS). */
+/* Moved to zk_dragout.c, which takes screen coordinates. */
 int zk_wanderer_drawer_at(struct Window *from, WORD mx, WORD my, char *out, size_t n,
                           char *why, size_t whyn)
 {
-    struct Screen *scr = from->WScreen;
-    struct Layer *layer;
-    char owner[64] = "", title[512] = "";
-    int found = 0, have_title = 0, ok = 0;
-    BPTR l;
-
-    LockLayerInfo(&scr->LayerInfo);
-    layer = WhichLayer(&scr->LayerInfo, from->LeftEdge + mx, from->TopEdge + my);
-    Forbid();
-    if (layer && layer->Window) {
-        struct Window *w = layer->Window;
-        struct MsgPort *port = w->UserPort;
-        struct Task *t = port ? port->mp_SigTask : NULL;
-        if (t && t->tc_Node.ln_Name) {
-            snprintf(owner, sizeof(owner), "%s", t->tc_Node.ln_Name);
-            found = 1;
-        }
-        if (w->Title) {
-            snprintf(title, sizeof(title), "%s", (char *)w->Title);
-            have_title = 1;
-        }
-    }
-    Permit();
-    UnlockLayerInfo(&scr->LayerInfo);
-
-    if (!found) {
-        snprintf(why, whyn, "not dropped on a window");
-        return 0;
-    }
-    if (!strstr(owner, "Wanderer")) {
-        snprintf(why, whyn, "dropped on a window of \"%s\"", owner);
-        return 0;
-    }
-    if (!have_title || !strchr(title, ':')) {
-        snprintf(why, whyn, "dropped on Wanderer, but not on a drawer");
-        return 0;
-    }
-    snprintf(out, n, "%s", title);
-    l = Lock((STRPTR)out, SHARED_LOCK);
-    if (l) {
-        struct FileInfoBlock *fib = AllocDosObject(DOS_FIB, NULL);
-        ok = fib && Examine(l, fib) && fib->fib_DirEntryType > 0;
-        FreeDosObject(DOS_FIB, fib);
-        UnLock(l);
-    }
-    if (!ok)
-        snprintf(why, whyn, "\"%s\" is not a drawer", out);
-    return ok;
+    return zk_dragout_drawer_at(from, from->LeftEdge + mx, from->TopEdge + my, out, n, why,
+                                whyn);
 }
 
 /* ---- events ---- */
@@ -284,7 +228,7 @@ int zk_table_init(void)
         struct Process *me = (struct Process *)FindTask(NULL);
         BPTR home = me->pr_HomeDir, cd = CurrentDir(BNULL);
         me->pr_HomeDir = BNULL;
-        zk_class = MUI_CreateCustomClass(NULL, MUIC_NList, NULL, sizeof(struct zk_data),
+        zk_class = MUI_CreateCustomClass(NULL, (ClassID)MUIC_NList, NULL, sizeof(struct zk_data),
                                          zk_dispatcher);
         me->pr_HomeDir = home;
         CurrentDir(cd);
@@ -317,7 +261,7 @@ Object *zk_table_new(const struct zk_table_cfg *cfg, Object **table,
         return NULL;
     d = INST_DATA(zk_class->mcc_Class, t);
     d->cfg = *cfg;
-    d->display.h_Entry = (HOOKFUNC)AROS_ASMSYMNAME(zk_display);
+    d->display.h_Entry = (HOOKFUNC)(void (*)(void))AROS_ASMSYMNAME(zk_display);
     d->display.h_Data = d;
     SetAttrs(t, MUIA_NList_DisplayHook2, (IPTR)&d->display, TAG_DONE);
     lv = NListviewObject,

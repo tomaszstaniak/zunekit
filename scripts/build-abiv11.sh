@@ -9,7 +9,8 @@ B=$R/build/abiv11-x86_64
 CC="$ZUNEKIT_TOOLCHAIN_ABIV11/x86_64-aros-gcc"
 mkdir -p "$B"
 "$CC" --sysroot="$ZUNEKIT_SDK_ABIV11" -O2 -Wall -Wno-pointer-sign -I"$R/src" \
-  -o "$B/zk-table-test" "$R/tests/zk_table_test.c" "$R/src/zk_table.c"
+  -o "$B/zk-table-test" "$R/tests/zk_table_test.c" "$R/src/zk_table.c" \
+  "$R/src/zk_dragout.c" "$R/src/zk_dragout_core.c"
 "$CC" --sysroot="$ZUNEKIT_SDK_ABIV11" -O2 -Wall -Wno-pointer-sign -I"$R/src" \
   -o "$B/zk-steps-test" "$R/tests/zk_steps_test.c" "$R/src/zk_steps.c"
 "$CC" --sysroot="$ZUNEKIT_SDK_ABIV11" -O2 -Wall -Wno-pointer-sign -I"$R/src" \

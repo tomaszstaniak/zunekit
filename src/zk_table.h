@@ -72,7 +72,9 @@ void zk_table_quiet(Object *table, int on);
 
 /* The drawer shown by the Wanderer window at (mx, my), relative to the window
  * from. 1 and the path in out when it is a drawer window of Wanderer and the
- * drawer exists; 0 and the reason in why otherwise. Usable without a table. */
+ * drawer exists; 0 and the reason in why otherwise. Usable without a table.
+ * A wrapper of zk_dragout_drawer_at (zk_dragout.h, screen coordinates):
+ * link src/zk_dragout.c and src/zk_dragout_core.c with src/zk_table.c. */
 int zk_wanderer_drawer_at(struct Window *from, WORD mx, WORD my, char *out, size_t n,
                           char *why, size_t whyn);
 
