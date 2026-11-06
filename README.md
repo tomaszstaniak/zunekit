@@ -18,6 +18,11 @@ Components:
 - `zk_drop`: the place in a window where files are dropped: a dashed border,
   an arrow and two lines of text.
 
+- `zk_linktext`: text with interactive links.
+- `zk_toolbar`: icon buttons, tool selection, toggles and status cells.
+- `zk_imageview`: zoomable ARGB images with scrolling, panning and drawing hooks.
+- `zk_dragout`: file dragging to Wanderer drawers and application windows.
+
 ## Start here
 
 - [Documentation](docs/README.md): what each component does and how to use it.

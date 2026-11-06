@@ -5,7 +5,7 @@ set -euo pipefail
 . "$(dirname "$0")/env.sh"
 R=$ZUNEKIT_ROOT
 case ${1:?v1 or v11} in
-  v1)  TC=${ZUNEKIT_TOOLCHAIN_V1:-/Volumes/arosv1/toolchain-mainline}; SDK=${ZUNEKIT_SDK_V1:?set in local.env}; B=${2:-$R/build/v1} ;;
+  v1)  TC=${ZUNEKIT_TOOLCHAIN_V1:?set in local.env}; SDK=${ZUNEKIT_SDK_V1:?set in local.env}; B=${2:-$R/build/v1} ;;
   v11) TC=$ZUNEKIT_TOOLCHAIN_ABIV11; SDK=$ZUNEKIT_SDK_ABIV11; B=${2:-$R/build/abiv11-x86_64} ;;
 esac
 mkdir -p "$B"
