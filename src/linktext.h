@@ -53,7 +53,9 @@
 #define MUIA_Linktext_MaxColumns (MUIB_Linktext | 0x07)
 /* [..G] ULONG: whole lines that fit in the object now, 0 before the first
    show. To follow the end of a growing text: at_end = First + Visible >=
-   LineCount before replacing the content, and First ~0UL after it. */
+   LineCount before replacing the content, and First ~0UL after it. A view
+   that shows its last line when it is made smaller or larger keeps showing
+   it. */
 #define MUIA_Linktext_Visible    (MUIB_Linktext | 0x08)
 
 /* Replaces the whole content, at once or not at all; returns a

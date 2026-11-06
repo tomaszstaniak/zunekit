@@ -145,6 +145,20 @@ static void clamp_first(struct Linktext_DATA *d, Object *obj)
     if (d->first < 0) d->first = 0;
 }
 
+/* The last whole lines were shown at the last draw: a view made smaller or
+   larger then stays at its end (a panel opened under a conversation that
+   follows its end). */
+static BOOL was_at_end(struct Linktext_DATA *d)
+{
+    return d->content && d->vis && d->first + (LONG)d->vis >= (LONG)d->nlines;
+}
+
+static void keep_end(struct Linktext_DATA *d, Object *obj)
+{
+    d->first = (LONG)d->nlines - visible(d, obj);
+    clamp_first(d, obj);
+}
+
 /* Wraps for the current width and font. Needs a RastPort, so only between
    Show and Hide. The top line keeps showing the same text. */
 static int layout(struct Linktext_DATA *d, Object *obj)
@@ -277,6 +291,7 @@ IPTR Linktext__MUIM_Draw(Class *cl, Object *obj, struct MUIP_Draw *msg)
         clip = MUI_AddClipping(muiRenderInfo(obj), _mleft(obj), top, _mwidth(obj), height);
     }
     DoSuperMethodA(cl, obj, (Msg)msg);
+    if (was_at_end(d) && d->vis != (ULONG)visible(d, obj)) keep_end(d, obj);
     d->vis = visible(d, obj);
     if ((msg->flags & (MADF_DRAWOBJECT | MADF_DRAWUPDATE)) && d->content && ready(d, obj, &r)) {
         /* The window can be drawn at a new size before Show when only its
@@ -984,9 +999,11 @@ IPTR Linktext__MUIM_Show(Class *cl, Object *obj, struct MUIP_Show *msg)
     struct Linktext_DATA *d = INST_DATA(cl, obj);
     IPTR r = DoSuperMethodA(cl, obj, (Msg)msg);
     struct lt_rp lr;
+    BOOL at_end = was_at_end(d);
     d->shown = TRUE;
     ready(d, obj, &lr);
     if (d->content && d->laid_w != column_width(d, obj)) layout(d, obj);
+    if (at_end) keep_end(d, obj);
     d->vis = visible(d, obj);
     clamp_first(d, obj);
     update_prop(d, obj);
