@@ -31,7 +31,7 @@ struct Library *IFFParseBase;
 static FILE *lg;
 #define L(...) do { if (lg) { fprintf(lg, __VA_ARGS__); fputc('\n', lg); fflush(lg); } printf(__VA_ARGS__); putchar('\n'); fflush(stdout); } while (0)
 
-enum { ID_FILL = 100, ID_SAVE, ID_REREAD, ID_DUMP, ID_CLIP, ID_ACK, ID_MSG };
+enum { ID_FILL = 100, ID_SAVE, ID_REREAD, ID_DUMP, ID_CLIP, ID_ACK, ID_MSG, ID_REV };
 
 static const char set_text[] =
     "Zażółć gęślą jaźń. Ελληνικά: αβγ. Русский: съешь ещё.\n"
@@ -185,6 +185,7 @@ int main(int argc, char **argv)
     DoMethod(b_dump, MUIM_Notify, MUIA_Pressed, FALSE, (IPTR)app, 2, MUIM_Application_ReturnID, ID_DUMP);
     DoMethod(b_clip, MUIM_Notify, MUIA_Pressed, FALSE, (IPTR)app, 2, MUIM_Application_ReturnID, ID_CLIP);
     DoMethod(field, MUIM_Notify, MUIA_ZkEdit_Acknowledge, MUIV_EveryTime, (IPTR)app, 2, MUIM_Application_ReturnID, ID_ACK);
+    DoMethod(edit, MUIM_Notify, MUIA_ZkEdit_Revision, MUIV_EveryTime, (IPTR)app, 2, MUIM_Application_ReturnID, ID_REV);
     DoMethod(edit, MUIM_Notify, MUIA_ZkEdit_Message, MUIV_EveryTime, (IPTR)app, 2, MUIM_Application_ReturnID, ID_MSG);
     DoMethod(edit, MUIM_Notify, MUIA_ZkEdit_Message, MUIV_EveryTime, (IPTR)status, 3, MUIM_Set, MUIA_Text_Contents, MUIV_TriggerValue);
     DoMethod(win, MUIM_Notify, MUIA_Window_CloseRequest, TRUE, (IPTR)app, 2, MUIM_Application_ReturnID,
@@ -204,7 +205,18 @@ int main(int argc, char **argv)
         switch (id) {
         case MUIV_Application_ReturnID_Quit: done = 1; break;
         case ID_FILL:
-            L("FILL Insert=%ld", (long)DoMethod(edit, MUIM_ZkEdit_Insert, (IPTR)set_text, (IPTR)(sizeof set_text - 1)));
+        {
+            IPTR r0 = 0, r1 = 0;
+            long r;
+            size_t n0;
+            get(edit, MUIA_ZkEdit_Revision, &r0);
+            contents(edit, &n0);
+            r = (long)DoMethod(edit, MUIM_ZkEdit_Insert, (IPTR)set_text, (IPTR)(sizeof set_text - 1));
+            get(edit, MUIA_ZkEdit_Revision, &r1);
+            contents(edit, &n);
+            L("FILL Insert=%ld revision %lu->%lu bytes %lu->%lu", r, (unsigned long)r0, (unsigned long)r1,
+              (unsigned long)n0, (unsigned long)n);
+        }
             set(win, MUIA_Window_ActiveObject, (IPTR)edit);
             break;
         case ID_SAVE: save(); break;
@@ -215,6 +227,7 @@ int main(int argc, char **argv)
             s = contents(field, &n); dump("FIELD", s, n);
             break;
         case ID_CLIP: clip(); break;
+        case ID_REV: { IPTR r = 0; get(edit, MUIA_ZkEdit_Revision, &r); contents(edit, &n); L("REV %lu bytes %lu", (unsigned long)r, (unsigned long)n); break; }
         case ID_ACK: s = contents(field, &n); dump("ACK", s, n); break;
         case ID_MSG: { IPTR m = 0; get(edit, MUIA_ZkEdit_Message, &m); if (m && *(char *)m) L("MESSAGE %s", (char *)m); break; }
         }

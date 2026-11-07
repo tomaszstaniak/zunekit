@@ -31,6 +31,7 @@ static struct Library *ze_cgx_base;
 #include "zk_edit.h"
 #include "zk_edit_core.h"
 #include "zk_text_aros.h"
+#include "utf8proc.h"
 
 #ifndef MAKE_ID
 #define MAKE_ID(a, b, c, d) ((ULONG)(a) << 24 | (ULONG)(b) << 16 | (ULONG)(c) << 8 | (ULONG)(d))
@@ -157,16 +158,27 @@ static int clip_write(const char *s, size_t n)
 {
     struct IFFHandle *iff;
     UBYTE *local;
-    size_t i = 0, k = 0;
+    utf8proc_uint8_t *nfc = NULL;
+    const char *c = s;
+    size_t i = 0, k = 0, cn = n;
     int ok = 0;
     if (!iff_open()) return 0;
     if (!(local = (UBYTE *)AllocVec(n + 1, MEMF_ANY))) return 0;
-    while (i < n) {
+    /* the 8-bit copy from the composed form: e + U+0301 is one character
+       there (the UTF8 chunk keeps the bytes as they are) */
+    {
+        utf8proc_ssize_t r = utf8proc_map((const utf8proc_uint8_t *)s, (utf8proc_ssize_t)n, &nfc,
+                                          UTF8PROC_STABLE | UTF8PROC_COMPOSE);
+        if (r >= 0 && nfc) { c = (const char *)nfc; cn = (size_t)r; }
+    }
+    while (i < cn) {
         size_t len;
-        unsigned long cp = zt_decode(s, n, i, &len);
-        local[k++] = zt_to_local(cp);
+        unsigned long cp = zt_decode(c, cn, i, &len);
+        /* joiners and variation selectors have no 8-bit form: left out */
+        if (cp != 0x200d && !(cp >= 0xfe00 && cp <= 0xfe0f)) local[k++] = zt_to_local(cp);
         i += len;
     }
+    free(nfc);
     if ((iff = AllocIFF())) {
         if ((iff->iff_Stream = (IPTR)OpenClipboard(0))) {
             InitIFFasClip(iff);
@@ -457,6 +469,10 @@ static IPTR ZkEdit_Draw(struct IClass *cl, Object *obj, struct MUIP_Draw *msg)
     if (!ze_cgx_base) ze_cgx_base = OpenLibrary((CONST_STRPTR)"cybergraphics.library", 0);
     rgb = ze_cgx_base && GetBitMapAttr(_rp(obj)->BitMap, BMA_DEPTH) > 8;
     dx = PADX - (d->single ? d->hscroll : 0);
+    /* an update draws over what is there: the background first, so no old
+       ink, caret or scrolled line stays */
+    if (msg->flags & MADF_DRAWUPDATE)
+        DoMethod(obj, MUIM_DrawBackground, _mleft(obj), _mtop(obj), w, h, _mleft(obj), _mtop(obj), 0);
     if (!(cov = (UBYTE *)AllocVec((ULONG)(w * lh), MEMF_ANY))) return 0;
     px = rgb ? (UBYTE *)AllocVec((ULONG)(w * h * 3), MEMF_ANY) : NULL;
     if (rgb && !px) { FreeVec(cov); return 0; }
@@ -729,6 +745,7 @@ void zk_edit_exit(void)
     if (ZkEditClass) { MUI_DeleteCustomClass(ZkEditClass); ZkEditClass = NULL; }
     if (ze_iff_base) { CloseLibrary(ze_iff_base); ze_iff_base = NULL; }
     if (ze_cgx_base) { CloseLibrary(ze_cgx_base); ze_cgx_base = NULL; }
+    zt_aros_close();
 }
 
 Object *zk_edit_new(Object **edit, int scroller, const struct TagItem *extra)

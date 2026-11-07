@@ -5,6 +5,7 @@
 #include <proto/muimaster.h>
 #include <clib/alib_protos.h>
 #include "zk_linktext.h"
+#include "zk_text_aros.h"
 
 extern ULONG Linktext_DataSize(void);
 extern APTR Linktext_Entry(void);
@@ -21,6 +22,7 @@ void zk_linktext_exit(void)
 {
     if (mcc) MUI_DeleteCustomClass(mcc);
     mcc = NULL;
+    zt_aros_close();
 }
 
 Object *zk_linktext_new(Object **view, int scroller, const struct TagItem *extra)

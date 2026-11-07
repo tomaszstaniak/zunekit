@@ -35,8 +35,14 @@ void zt_blit(struct RastPort *rp, struct ColorMap *cm, ULONG pen, const UBYTE *c
 /* UTF-8 to and from the system's 8-bit set, for keys and older clipboard
    readers: through codesets.library when it is there, else Latin-1.
    zt_from_local writes at most 4 bytes for one character; zt_to_local
-   gives '?' for what the set has not. */
+   gives '?' for what the set has not. The system's set is the one
+   ENV:CHARSET names (the Locale preferences set it), read at the first
+   conversion after zt_aros_close. */
 size_t zt_from_local(UBYTE ch, char *utf8);
 UBYTE zt_to_local(unsigned long cp);
+
+/* Closes the libraries opened here (codesets, cybergraphics); the next
+   call opens them again. Call from a class's exit. */
+void zt_aros_close(void);
 
 #endif

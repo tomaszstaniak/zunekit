@@ -18,6 +18,7 @@ static struct Library *zt_cgx_base;
 #define __CODESETS_LIBBASE zt_cs_base
 static struct Library *zt_cs_base;
 static int zt_cs_tried;
+static struct codeset *zt_cs;          /* the system's set, NULL: Latin-1 */
 #include <proto/codesets.h>
 
 #include "zk_text_aros.h"
@@ -120,13 +121,32 @@ void zt_blit(struct RastPort *rp, struct ColorMap *cm, ULONG pen, const UBYTE *c
     }
 }
 
+/* The system's 8-bit set: the one ENV:CHARSET names (set by the Locale
+   preferences; diskfont maps outline fonts by it too), else codesets'
+   own default. Read once: codesets' default alone is fixed when the
+   library loads, so a CHARSET set later was not seen. */
 static int codesets(void)
 {
     if (!zt_cs_tried) {
+        char name[64];
         zt_cs_tried = 1;
         zt_cs_base = OpenLibrary((CONST_STRPTR)"codesets.library", 6);
+        if (zt_cs_base) {
+            if (GetVar((CONST_STRPTR)"CHARSET", (STRPTR)name, sizeof name, GVF_GLOBAL_ONLY) > 0)
+                zt_cs = CodesetsFind((CONST_STRPTR)name, CSA_FallbackToDefault, FALSE, TAG_DONE);
+            if (!zt_cs) zt_cs = CodesetsFind(NULL, CSA_FallbackToDefault, TRUE, TAG_DONE);
+        }
     }
-    return zt_cs_base != NULL;
+    return zt_cs_base != NULL && zt_cs != NULL;
+}
+
+void zt_aros_close(void)
+{
+    if (zt_cs_base) CloseLibrary(zt_cs_base);
+    if (zt_cgx_base) CloseLibrary(zt_cgx_base);
+    zt_cs_base = zt_cgx_base = NULL;
+    zt_cs = NULL;
+    zt_cs_tried = 0;
 }
 
 /* Latin-1 as UTF-8. */
@@ -146,7 +166,7 @@ size_t zt_from_local(UBYTE ch, char *utf8)
         char src[2];
         UTF8 *u;
         src[0] = (char)ch; src[1] = 0;
-        u = CodesetsUTF8Create(CSA_Source, (IPTR)src, CSA_SourceLen, 1, TAG_DONE);
+        u = CodesetsUTF8Create(CSA_SourceCodeset, (IPTR)zt_cs, CSA_Source, (IPTR)src, CSA_SourceLen, 1, TAG_DONE);
         if (u) {
             n = strlen((const char *)u);
             if (n > 4 || !n) n = 0;
@@ -168,7 +188,7 @@ UBYTE zt_to_local(unsigned long cp)
     else { u[0] = (char)(0xf0 | (cp >> 18)); u[1] = (char)(0x80 | ((cp >> 12) & 0x3f)); u[2] = (char)(0x80 | ((cp >> 6) & 0x3f)); u[3] = (char)(0x80 | (cp & 0x3f)); n = 4; }
     u[n] = 0;
     if (codesets()) {
-        STRPTR s = CodesetsUTF8ToStr(CSA_Source, (IPTR)u, CSA_SourceLen, n, TAG_DONE);
+        STRPTR s = CodesetsUTF8ToStr(CSA_DestCodeset, (IPTR)zt_cs, CSA_Source, (IPTR)u, CSA_SourceLen, n, TAG_DONE);
         UBYTE r = '?';
         if (s) {
             if (s[0] && !s[1]) r = (UBYTE)s[0];
