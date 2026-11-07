@@ -19,6 +19,8 @@
 #include <proto/intuition.h>
 #include <proto/muimaster.h>
 #include <proto/utility.h>
+#include <proto/diskfont.h>
+#include <graphics/text.h>
 #include <clib/alib_protos.h>
 #include <string.h>
 
@@ -1204,15 +1206,43 @@ static void font_cleanup(Object **holder)
     *holder = NULL;
 }
 
+/* The normal font a quarter larger (at least 3 pixels), through
+   diskfont.library: for Large text when the user's big font is not larger
+   than the normal one (ABIv11 2026.09's settings). NULL when it cannot be
+   opened larger. */
+static struct TextFont *larger_font(Object *obj)
+{
+    struct TextFont *f = _font(obj), *l = NULL;
+    struct Library *DiskfontBase = OpenLibrary((CONST_STRPTR)"diskfont.library", 0);
+    struct TextAttr ta;
+    UWORD grow;
+    if (!DiskfontBase || !f || !f->tf_Message.mn_Node.ln_Name) {
+        if (DiskfontBase) CloseLibrary(DiskfontBase);
+        return NULL;
+    }
+    grow = f->tf_YSize / 4 > 3 ? f->tf_YSize / 4 : 3;
+    ta.ta_Name = (STRPTR)f->tf_Message.mn_Node.ln_Name;
+    ta.ta_YSize = f->tf_YSize + grow;
+    ta.ta_Style = FS_NORMAL;
+    ta.ta_Flags = 0;
+    l = OpenDiskFont(&ta);
+    CloseLibrary(DiskfontBase);           /* an open font keeps what it needs */
+    if (l && l->tf_YSize <= f->tf_YSize) { CloseFont(l); l = NULL; }
+    return l;
+}
+
 static void fixed_font_setup(struct Linktext_DATA *d, Object *obj)
 {
     d->fixed = font_setup(obj, MUIV_Font_Fixed, &d->fixed_obj);
-    /* Large text: the user's big font, only when it is larger. */
+    /* Large text: the user's big font when it is larger, else the normal
+       one opened larger, else the normal one. */
     d->large = font_setup(obj, MUIV_Font_Big, &d->large_obj);
     if (d->large && d->large->tf_YSize <= _font(obj)->tf_YSize) {
         font_cleanup(&d->large_obj);
         d->large = NULL;
     }
+    d->large_own = NULL;
+    if (!d->large) d->large = d->large_own = larger_font(obj);
 }
 
 static void fixed_font_cleanup(struct Linktext_DATA *d)
@@ -1220,6 +1250,8 @@ static void fixed_font_cleanup(struct Linktext_DATA *d)
     font_cleanup(&d->fixed_obj);
     d->fixed = NULL;
     font_cleanup(&d->large_obj);
+    if (d->large_own) CloseFont(d->large_own);
+    d->large_own = NULL;
     d->large = NULL;
 }
 

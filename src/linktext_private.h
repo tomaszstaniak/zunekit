@@ -24,6 +24,7 @@ struct Linktext_DATA
     Object *fixed_obj;           /* what holds `fixed` open            */
     struct TextFont *large;      /* the big font, NULL: not larger     */
     Object *large_obj;
+    struct TextFont *large_own;  /* opened here when Big is not larger  */
     LONG largeh, large_base;     /* a line with Large text             */
     UWORD dim_pen;               /* MPEN_* for Span_Dim                */
     ULONG empty8;                /* empty paragraph, eighths of a line  */
