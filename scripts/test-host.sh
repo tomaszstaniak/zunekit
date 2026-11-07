@@ -12,3 +12,8 @@ $CC $F -o "$B/zk-core-test" "$R/tests/host/zk_core_test.c" "$R/src/zk_imageview_
 $CC $F -o "$B/lt-test" "$R/tests/host/linktext_core_test.c" "$R/src/linktext_core.c"
 "$B/zk-core-test"
 "$B/lt-test"
+# zk_text: FreeType from pkg-config (the system's freetype2.library on AROS)
+FT=$(pkg-config --cflags --libs freetype2)
+$CC $F -I"$R/third_party/utf8proc" -DUTF8PROC_STATIC -o "$B/zt-test" "$R/tests/host/zk_text_test.c" "$R/src/zk_text.c" \
+  "$R/third_party/utf8proc/utf8proc.c" $FT
+"$B/zt-test" "$R/tests/fixtures/fonts"
