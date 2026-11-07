@@ -717,3 +717,5 @@ int zt_contains_folded(const char *hay, size_t hn, const char *needle, size_t nn
     free(k);
     return r;
 }
+
+void zt_free(void *p) { free(p); }

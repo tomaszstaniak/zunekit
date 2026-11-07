@@ -143,6 +143,10 @@ char *zt_fold(const char *s, size_t n, size_t *outn);
    memory (the caller says so; the texts stay as they are). */
 int zt_contains_folded(const char *hay, size_t hn, const char *needle, size_t nn);
 
+/* Frees what zt_fold, zt_compose and the zk_text_aros conversions return
+   (through the layer's own allocator, also when it is a shared library). */
+void zt_free(void *p);
+
 /* s[0..n) in the composed form (NFC) in a new buffer (*outn bytes, NUL
    after them; free() it). NULL when s is not UTF-8 or out of memory. */
 char *zt_compose(const char *s, size_t n, size_t *outn);
