@@ -1001,7 +1001,7 @@ static void utf8_mode(void)
         seed = seed * 1103515245u + 12345u;
         width = 6 + (long)((seed >> 8) % 120);
         c = mk(t, NULL, 0);
-        lt_set_utf8(c, 1);
+        lt_set_utf8(c, 1, NULL);
         OK(lt_layout(c, width, 8, font_u8, NULL, &l, &n));
         for (i = 0; i < n; i++) {
             OK(zt_cluster_start(c->text, len, l[i].start) == l[i].start || l[i].start == len);
@@ -1024,7 +1024,7 @@ static void utf8_mode(void)
             seed = seed * 1103515245u + 12345u;
             snprintf(t2, sizeof t2, "%s%s", t, pieces[(seed >> 8) % 13]);
             c2 = mk(t2, NULL, 0);
-            lt_set_utf8(c2, 1);
+            lt_set_utf8(c2, 1, NULL);
             OK(lt_layout(c2, width, 8, font_u8, NULL, &l2, &n2));
             OK(lt_layout_keep(c2, width, 8, font_u8, NULL, c, l, n, lt_common_prefix(c, c2), &lk, &nk));
             OK(same_lines(l2, n2, lk, nk));
@@ -1035,6 +1035,56 @@ static void utf8_mode(void)
         lt_content_unref(c);
     }
     OK(live == 0);
+}
+
+/* A kerned font: "AV" is 3 pixels narrower than A and V apart. xin gives
+   the x inside a run shaped whole, as zt_x does. */
+static long font_kern(void *ctx, const char *s, lt_ulong n, lt_ulong fl)
+{
+    lt_ulong i;
+    long w = 0;
+    (void)ctx; (void)fl;
+    for (i = 0; i < n; i++) {
+        w += 10;
+        if (i + 1 < n && s[i] == 'A' && s[i + 1] == 'V') w -= 3;
+    }
+    return w;
+}
+static long xin_kern(void *ctx, const char *s, lt_ulong n, lt_ulong off, lt_ulong fl)
+{
+    lt_ulong i;
+    long w = 0;
+    (void)ctx; (void)fl; (void)n;
+    for (i = 0; i < off; i++) {
+        w += 10;
+        if (i + 1 < n && s[i] == 'A' && s[i + 1] == 'V') w -= 3;   /* kerning with what follows, in the run */
+    }
+    return w;
+}
+
+static void run_positions(void)
+{
+    lt_span_in sp[1] = { { 3, 3, LT_BOLD, NULL, 0 } };
+    lt_content *c = mk("AVAAVA", sp, 1);
+    lt_line *l = NULL;
+    lt_ulong n = 0, caret = 0, a, b;
+    lt_set_utf8(c, 1, xin_kern);
+    OK(lt_layout(c, 1000, 8, font_kern, NULL, &l, &n) && n == 1);
+    /* the first run "AVA": V at 7 (A kerned), the second run starts at its
+       whole width 27, its own V at 27 + 7 */
+    OK(lt_line_x(c, 0, 6, 1, font_kern, NULL) == 7);
+    OK(lt_line_x(c, 0, 6, 3, font_kern, NULL) == 27);
+    OK(lt_line_x(c, 0, 6, 5, font_kern, NULL) == 27 + 7 + 10);
+    OK(lt_line_x(c, 0, 6, 6, font_kern, NULL) == 54);
+    OK(lt_font_run(c, 0, 6, 4, &a, &b) == LT_BOLD && a == 3 && b == 6);
+    OK(lt_font_run(c, 0, 6, 1, &a, &b) == 0 && a == 0 && b == 3);
+    /* hits land on those places */
+    lt_hit(c, &l[0], 8, font_kern, NULL, &caret);
+    OK(caret == 1);
+    lt_hit(c, &l[0], 28, font_kern, NULL, &caret);
+    OK(caret == 3);
+    lt_free(l);
+    lt_content_unref(c);
 }
 
 int main(void)
@@ -1058,6 +1108,7 @@ int main(void)
     keep_layout();
     tables();
     utf8_mode();
+    run_positions();
     printf("linktext core: %d checks passed\n", checks);
     return 0;
 }

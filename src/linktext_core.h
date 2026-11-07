@@ -33,6 +33,11 @@ typedef lt_block_in lt_block;
 
 /* One allocation, shared by reference: a hook keeps its target alive this way
    while the content is being replaced under it. */
+/* UTF-8: the x of byte off in s[0..n) shaped as one piece in the font of
+   `flags` (zt_x), so that a caret inside a run sits where the run's drawing
+   puts it. */
+typedef long (*lt_xin)(void *ctx, const char *s, lt_ulong n, lt_ulong off, lt_ulong flags);
+
 typedef struct {
     int refs;
     char *text;
@@ -48,6 +53,7 @@ typedef struct {
                                   lines are hit only on grapheme cluster
                                   boundaries (zk_text); set it before laying
                                   the content out, lt_set_utf8 */
+    lt_xin xin;                /* UTF-8: x inside a run, or NULL */
 } lt_content;
 
 enum { LT_OK, LT_RANGE, LT_ORDER, LT_TARGET, LT_TOOLARGE, LT_NOMEM };
@@ -96,8 +102,11 @@ lt_content *lt_document_new(const char *text, lt_ulong len, const lt_span_in *sp
    blocks are copied: (lt_ulong)-1 counts up to the first NUL. */
 lt_ulong lt_text_length(const char *text, lt_ulong len);
 void lt_content_ref(lt_content *c);
-/* Marks c as UTF-8 (on 1) or as the system's 8-bit set (0, as created). */
-void lt_set_utf8(lt_content *c, int on);
+/* Marks c as UTF-8 (on 1) or as the system's 8-bit set (0, as created);
+   xin places carets inside a run (NULL: the width of the run's start). */
+void lt_set_utf8(lt_content *c, int on, lt_xin xin);
+
+
 void lt_content_unref(lt_content *c);
 
 /* Width in pixels of n bytes; `flags` has LT_BOLD and LT_FIXED of the run. */
@@ -123,6 +132,13 @@ typedef struct {
     int large;       /* holds Large text: lt_heights gives it largeh   */
     long ty;         /* text below the line's top: a table row's room  */
 } lt_line;
+
+/* The x of byte off on the line [start, end) as it is drawn: the line in
+   runs of one font (spans with Bold, Fixed or Large), each shaped whole. */
+long lt_line_x(const lt_content *c, lt_ulong start, lt_ulong end, lt_ulong off, lt_measure m, void *ctx);
+/* The run of one font on [start, end) that holds off: *a..*b and its
+   font flags. */
+lt_ulong lt_font_run(const lt_content *c, lt_ulong start, lt_ulong end, lt_ulong off, lt_ulong *a, lt_ulong *b);
 
 /* Wraps to a column `width` pixels wide: *out is a new array of *n lines,
    for lt_free. `avg` is the average character width, for block indents.

@@ -87,43 +87,96 @@ static void fonts(const char *dir)
     OK(zt_face_for(f, 0x0416) == 1 && zt_face_for(v, 0x0416) == -1);
     OK(zt_face_for(f, 0x1D11E) == -1);
 
-    /* measure: the text's own widths; a decomposed é is as wide as its
-       base letter (the mark advances 0); missing glyphs take a box */
-    OK(zt_measure(f, "", 0) == 0);
-    w = zt_measure(f, "e", 1);
-    wd = zt_measure(f, E_DECOMPOSED, 3);
-    OK(w > 0 && wd >= w && wd <= w + 1);
-    OK(zt_measure(f, POLISH, strlen(POLISH)) > 0);
-    OK(zt_measure(f, NON_BMP, 4) == (16 + 1) / 2);
-    OK(zt_measure(f, "\xe2\x80\x8d", 3) == 0);                           /* a joiner draws nothing */
+    /* measure: the text's own widths; a decomposed é is as wide as the
+       composed one (the shaper puts the mark over its letter); missing
+       glyphs take a box; a joiner draws nothing */
+    OK(zt_measure(f, "", 0, 0) == 0);
+    w = zt_measure(f, E_COMPOSED, 2, 0);
+    wd = zt_measure(f, E_DECOMPOSED, 3, 0);
+    OK(w > 0 && wd >= w - 1 && wd <= w + 1);
+    OK(zt_measure(f, POLISH, strlen(POLISH), 0) > 0);
+    OK(zt_measure(f, NON_BMP, 4, 0) == (16 + 1) / 2);
+    OK(zt_measure(f, "\xe2\x80\x8d", 3, 0) == 0);
 
-    /* fit ends on a cluster boundary; hit finds the nearer boundary */
+    /* fit, hit and x come from the same shaping as measure and draw */
     {
         const char *s = "a" E_DECOMPOSED "b";
-        long wa = zt_measure(f, "a", 1), we = zt_measure(f, E_DECOMPOSED, 3);
+        long wa = zt_x(f, s, 4 + 1, 1, 0), wae = zt_x(f, s, 5, 4, 0);
         n = strlen(s);
-        OK(zt_fit(f, s, n, wa) == 1 && zt_fit(f, s, n, wa + we - 1) == 1 && zt_fit(f, s, n, wa + we) == 4);
-        OK(zt_fit(f, s, n, 0) == 0 && zt_fit(f, s, n, 10000) == n);
-        OK(zt_hit(f, s, n, 0) == 0 && zt_hit(f, s, n, wa + 1) == 1 && zt_hit(f, s, n, wa + we - 1) == 4);
-        OK(zt_hit(f, s, n, 10000) == n);
+        OK(zt_x(f, s, n, 0, 0) == 0 && zt_x(f, s, n, n, 0) == zt_measure(f, s, n, 0));
+        OK(zt_x(f, s, n, 2, 0) == zt_x(f, s, n, 1, 0));              /* inside a cluster: its start */
+        OK(zt_fit(f, s, n, 0, 0) == 0 && zt_fit(f, s, n, 10000, 0) == n);
+        OK(zt_fit(f, s, n, zt_measure(f, s, 1, 0), 0) == 1 && zt_fit(f, s, n, zt_measure(f, s, 4, 0), 0) == 4);
+        OK(zt_hit(f, s, n, 0, 0) == 0 && zt_hit(f, s, n, wa + 1, 0) == 1 && zt_hit(f, s, n, wae - 1, 0) == 4);
+        OK(zt_hit(f, s, n, 10000, 0) == n);
+    }
+
+    /* the review's reproducer (2026-11-07): kerning inside "AV" counts for
+       measure, fit and hit alike */
+    {
+        const char *one[1];
+        zt_font *k;
+        long av, a, vv;
+        one[0] = vera;
+        OK((k = zt_font_open(one, 1, 40)) != NULL);
+        av = zt_measure(k, "AV", 2, 0);
+        a = zt_measure(k, "A", 1, 0);
+        vv = zt_measure(k, "V", 1, 0);
+        OK(av < a + vv);                                              /* Vera kerns AV */
+        OK(zt_fit(k, "AV", 2, av, 0) == 2 && zt_fit(k, "AV", 2, av - 1, 0) == 1);
+        OK(zt_x(k, "AV", 2, 1, 0) < a && zt_hit(k, "AV", 2, av - 1, 0) == 2);
+        /* bold: wider by the same amount measured and drawn */
+        {
+            unsigned char *c1 = (unsigned char *)calloc(400 * 60, 1), *c2 = (unsigned char *)calloc(400 * 60, 1);
+            long wb = zt_measure(k, "AVA", 3, ZT_BOLD), wn = zt_measure(k, "AVA", 3, 0), x, right1 = 0, right2 = 0;
+            int y;
+            OK(c1 && c2 && wb > wn);
+            OK(zt_draw(k, "AVA", 3, ZT_BOLD, c1, 400, 60, 400, 10, 45) == wb);
+            OK(zt_draw(k, "AVA", 3, 0, c2, 400, 60, 400, 10, 45) == wn);
+            for (y = 0; y < 60; y++)
+                for (x = 0; x < 400; x++) {
+                    if (c1[y * 400 + x] > 64 && x > right1) right1 = x;
+                    if (c2[y * 400 + x] > 64 && x > right2) right2 = x;
+                }
+            /* the ink ends near its advance in both: bold ink is wider by
+               about what bold adds to the width */
+            OK(right1 - 10 <= wb + 2 && right2 - 10 <= wn + 2 && right1 - right2 >= (wb - wn) / 2);
+            free(c1); free(c2);
+        }
+        zt_font_close(k);
     }
 
     /* draw: coverage where the text is, nothing past its advance; the box
        for a missing glyph is drawn; counters follow */
     cov = (unsigned char *)calloc(200 * 40, 1);
     OK(cov != NULL);
-    w = zt_draw(f, "Hi" CYRIL NON_BMP, strlen("Hi" CYRIL NON_BMP), cov, 200, 40, 200, 2, 30);
-    OK(w == zt_measure(f, "Hi" CYRIL NON_BMP, strlen("Hi" CYRIL NON_BMP)));
+    w = zt_draw(f, "Hi" CYRIL NON_BMP, strlen("Hi" CYRIL NON_BMP), 0, cov, 200, 40, 200, 2, 30);
+    OK(w == zt_measure(f, "Hi" CYRIL NON_BMP, strlen("Hi" CYRIL NON_BMP), 0));
     any = 0;
     for (i = 0; i < 200 * 40; i++) if (cov[i]) { any = 1; break; }
     OK(any);
     for (i = 0; i < 40; i++) OK(!cov[i * 200 + 2 + w + 2]);
-    zt_font_counts(f, &fb, &miss);
-    OK(fb >= 5 && miss >= 1);
+    {
+        unsigned long sh;
+        zt_font_counts(f, &fb, &miss, &sh);
+        OK(fb >= 1 && miss >= 1 && sh >= 1);
+    }
+    /* the decomposed é's accent is drawn over its letter, inside its width */
+    memset(cov, 0, 200 * 40);
+    w = zt_draw(f, E_DECOMPOSED, 3, 0, cov, 200, 40, 200, 2, 30);
+    {
+        int top = 40, x, y;
+        for (y = 0; y < 40; y++) for (x = 0; x < 200; x++) if (cov[y * 200 + x] > 64 && y < top) top = y;
+        for (y = 0; y < 40; y++) for (x = 2 + (int)w + 2; x < 200; x++) OK(!cov[y * 200 + x]);
+        OK(top < 30 - zt_font_ascent(f) / 2);                        /* something above x-height: the accent */
+    }
     /* drawing outside the buffer is clipped, not a crash */
-    zt_draw(f, "W", 1, cov, 200, 40, 200, 195, 50);
-    zt_draw(f, "W", 1, cov, 200, 40, 200, -30, -5);
+    zt_draw(f, "W", 1, 0, cov, 200, 40, 200, 195, 50);
+    zt_draw(f, "W", 1, 0, cov, 200, 40, 200, -30, -5);
     free(cov);
+
+    /* a family emoji is one cluster even with no face for it: one box */
+    OK(zt_measure(f, FAMILY, strlen(FAMILY), 0) == (16 + 1) / 2);
 
     zt_font_close(f);
     zt_font_close(v);
@@ -151,9 +204,36 @@ static void otag(void)
     OK(!zt_otag_file(b, 4, out, sizeof out));
 }
 
+/* One long paragraph: walking its clusters, finding cluster starts from
+   a known boundary and word moves stay linear (no rescans from the
+   paragraph's start for each step). Timed loosely: 1 MB must take well
+   under a second on the host. */
+#include <time.h>
+static void scaling(void)
+{
+    size_t n = 1u << 20, i, b, count = 0;
+    char *s = (char *)malloc(n);
+    zt_iter it;
+    clock_t t0;
+    double sec;
+    OK(s != NULL);
+    for (i = 0; i < n; i++) s[i] = "ab cd\xc5"[i % 6] == '\xc5' ? 'e' : "ab cd\xc5"[i % 6];
+    t0 = clock();
+    zt_iter_init(&it, s, n, 0);
+    while ((b = zt_iter_next(&it)) < n) count++;
+    OK(count + 1 == n);
+    for (i = 0, b = 0; i < 2000; i++) b = zt_cluster_start_from(s, n, n - 4096, n - 4096 + (i % 4096));
+    for (i = 0, b = 0; b < 200000; i++) b = zt_next_word(s, n, b);
+    sec = (double)(clock() - t0) / CLOCKS_PER_SEC;
+    printf("scaling: 1 MB paragraph walked, 2000 starts, %lu word moves in %.3f s\n", (unsigned long)i, sec);
+    OK(sec < 2.0);
+    free(s);
+}
+
 int main(int argc, char **argv)
 {
     otag();
+    scaling();
     text();
     fonts(argc > 1 ? argv[1] : "tests/fixtures/fonts");
     printf("zk_text: %d checks passed\n", checks);

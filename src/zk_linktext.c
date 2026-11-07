@@ -45,3 +45,9 @@ Object *zk_linktext_new(Object **view, int scroller, const struct TagItem *extra
     g = HGroup, MUIA_Group_Spacing, 0, Child, (IPTR)v, Child, (IPTR)bar, End;
     return g;
 }
+
+int linktext_utf8_fonts(CONST_STRPTR const *fallbacks, char *why, ULONG whylen);
+int zk_linktext_utf8_fonts(CONST_STRPTR const *fallbacks, char *why, ULONG whylen)
+{
+    return linktext_utf8_fonts(fallbacks, why, whylen);
+}

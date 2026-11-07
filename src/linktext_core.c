@@ -137,7 +137,7 @@ lt_ulong lt_text_length(const char *text, lt_ulong len)
 }
 
 void lt_content_ref(lt_content *c) { c->refs++; }
-void lt_set_utf8(lt_content *c, int on) { c->utf8 = on != 0; }
+void lt_set_utf8(lt_content *c, int on, lt_xin xin) { c->utf8 = on != 0; c->xin = xin; }
 
 void lt_content_unref(lt_content *c)
 {
@@ -194,8 +194,13 @@ static lt_ulong fit(const lt_content *c, lt_ulong pos, lt_ulong max, long width,
     if (c->utf8 && pos + lo < pos + max) {
         /* back to the cluster it is in; a cluster too wide for the line
            still goes on it, whole */
-        lt_ulong b = zt_cluster_start(c->text, c->len, pos + lo);
-        if (b <= pos) b = zt_next_cluster(c->text, c->len, pos);
+        /* pos starts a line: a boundary, so no scan from the paragraph's start */
+        lt_ulong b = zt_cluster_start_from(c->text, c->len, pos, pos + lo);
+        if (b <= pos) {
+            zt_iter it;
+            zt_iter_init(&it, c->text, c->len, pos);
+            b = zt_iter_next(&it);
+        }
         if (b > pos + max) b = pos + max;
         lo = b - pos;
     }
@@ -741,14 +746,16 @@ long lt_hit(const lt_content *c, const lt_line *line, long x, lt_measure m, void
         return -1;
     }
     if (c->utf8) {
-        /* cluster by cluster: x is on the cluster whose span holds it */
+        /* cluster by cluster, each boundary where the drawing puts it */
         lt_ulong a = line->start, end = line->start + line->shown;
         long w0 = 0;
+        zt_iter it;
+        zt_iter_init(&it, c->text, c->len, a);
         while (a < end) {
-            lt_ulong b = zt_next_cluster(c->text, c->len, a);
+            lt_ulong b = zt_iter_next(&it);
             long w1;
             if (b > end) b = end;
-            w1 = lt_width(c, line->start, b - line->start, m, ctx);
+            w1 = lt_line_x(c, line->start, end, b, m, ctx);
             if (x < w1) {
                 *caret = x - w0 >= w1 - x ? b : a;
                 return (long)a;
@@ -768,6 +775,51 @@ long lt_hit(const lt_content *c, const lt_line *line, long x, lt_measure m, void
     whi = lt_width(c, line->start, lo + 1, m, ctx);
     *caret = line->start + (x - wlo >= whi - x ? lo + 1 : lo);
     return (long)(line->start + lo);
+}
+
+lt_ulong lt_font_run(const lt_content *c, lt_ulong start, lt_ulong end, lt_ulong off, lt_ulong *a, lt_ulong *b)
+{
+    lt_ulong i = span_from(c, start), pos = start;
+    while (pos < end) {
+        lt_ulong stop = end, fl = 0;
+        if (i < c->nspans && c->spans[i].start <= pos) {
+            lt_ulong se = c->spans[i].start + c->spans[i].length;
+            if (se < stop) stop = se;
+            fl = c->spans[i].flags & LT_FONT_FLAGS;
+            i++;
+        } else if (i < c->nspans && c->spans[i].start < stop) {
+            stop = c->spans[i].start;
+        }
+        if (off < stop) { *a = pos; *b = stop; return fl; }
+        pos = stop;
+    }
+    *a = *b = end;
+    return 0;
+}
+
+long lt_line_x(const lt_content *c, lt_ulong start, lt_ulong end, lt_ulong off, lt_measure m, void *ctx)
+{
+    lt_ulong i = span_from(c, start), pos = start;
+    long w = 0;
+    while (pos < end) {
+        lt_ulong stop = end, fl = 0;
+        if (i < c->nspans && c->spans[i].start <= pos) {
+            lt_ulong se = c->spans[i].start + c->spans[i].length;
+            if (se < stop) stop = se;
+            fl = c->spans[i].flags & LT_FONT_FLAGS;
+            i++;
+        } else if (i < c->nspans && c->spans[i].start < stop) {
+            stop = c->spans[i].start;
+        }
+        if (off < stop) {
+            if (off <= pos) return w;
+            return w + (c->xin ? c->xin(ctx, c->text + pos, stop - pos, off - pos, fl)
+                               : m(ctx, c->text + pos, off - pos, fl));
+        }
+        w += m(ctx, c->text + pos, stop - pos, fl);
+        pos = stop;
+    }
+    return w;
 }
 
 long lt_link_at(const lt_content *c, lt_ulong off)

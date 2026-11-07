@@ -99,8 +99,7 @@ static long measure(void *ctx, const char *s, lt_ulong n, lt_ulong flags)
     if (r->d && r->d->utf8) {
         struct zt_font *z = zfont(r->d, flags);
         if (!z) return 0;
-        /* bold is drawn twice a pixel apart: a pixel wider a cluster */
-        return zt_measure(z, s, n) + ((flags & LT_BOLD) ? (long)zt_clusters(s, n) : 0);
+        return zt_measure(z, s, n, (flags & LT_BOLD) ? ZT_BOLD : 0);
     }
     use_font(r, flags);
     if (flags & LT_BOLD) {
@@ -126,7 +125,7 @@ static struct RastPort *ready(struct Linktext_DATA *d, Object *obj, struct lt_rp
     if (!r->rp) return NULL;
     SetFont(r->rp, r->normal);
     if (!d->avg) {
-        d->avg = (d->utf8 && d->zf[0] ? zt_measure(d->zf[0], AVG_SAMPLE, sizeof AVG_SAMPLE - 1)
+        d->avg = (d->utf8 && d->zf[0] ? zt_measure(d->zf[0], AVG_SAMPLE, sizeof AVG_SAMPLE - 1, 0)
                                       : TextLength(r->rp, (STRPTR)AVG_SAMPLE, sizeof AVG_SAMPLE - 1))
                  / (LONG)(sizeof AVG_SAMPLE - 1);
         if (d->avg < 1) d->avg = 1;
@@ -276,49 +275,69 @@ static int layout(struct Linktext_DATA *d, Object *obj)
 
 /* ------------------------------------------------------------------- draw */
 
-/* UTF-8: one run of text in the RastPort's current pen, over what is
-   already drawn there: coverage from zk_text blended into the pixels read
-   back (true colour), or the pixels at half coverage and more set in the
-   pen (screens of 256 colours and less). x, y: the run's box; base: the
-   baseline; w, th: its width and the line's text height. */
-static void draw_utf8(struct Linktext_DATA *d, Object *obj, struct RastPort *rp, LONG x, LONG y, LONG base,
-                      LONG w, LONG th, const char *s, ULONG n, lt_ulong fl)
+/* UTF-8: the x of byte off inside s[0..n) shaped whole (lt_xin). */
+static long xin(void *ctx, const char *s, lt_ulong n, lt_ulong off, lt_ulong flags)
+{
+    struct lt_rp *r = (struct lt_rp *)ctx;
+    struct zt_font *z = r->d ? zfont(r->d, flags) : NULL;
+    return z ? zt_x(z, s, n, off, (flags & LT_BOLD) ? ZT_BOLD : 0) : 0;
+}
+
+/* UTF-8: part of a run of one font in the RastPort's current pen. The run
+   s[0..n) is shaped and drawn whole at rx, as it is measured; only the
+   columns xa..xb-1 (the part: a selection, a link, a colour) take this
+   pen, so a run never shifts where a selection or a link begins. Coverage
+   is blended into the pixels read back (true colour), or pixels at half
+   coverage and more are set (screens of 256 colours and less). y: the
+   line's top; base: its baseline; th: its text height. */
+static void draw_utf8(struct Linktext_DATA *d, Object *obj, struct RastPort *rp, LONG rx, LONG xa, LONG xb,
+                      LONG y, LONG base, LONG th, const char *s, ULONG n, lt_ulong fl)
 {
     struct zt_font *z = zfont(d, fl);
-    LONG bw = w + 2, bh = th, i, j;
+    LONG rw, bw, bh = th, i, j, c0, c1;
     UBYTE *cov;
     ULONG pen = GetAPen(rp), rgb[3];
+    unsigned zf = (fl & LT_BOLD) ? ZT_BOLD : 0;
     struct ColorMap *cm = _screen(obj) ? _screen(obj)->ViewPort.ColorMap : NULL;
-    if (!z || bw <= 0 || bh <= 0 || !cm) return;
+    if (!z || !cm || xb <= xa || bh <= 0) return;
+    rw = zt_measure(z, s, n, zf);
+    bw = rw + 4;                                     /* ink can reach a little past the advance */
     if (!(cov = (UBYTE *)AllocVec((ULONG)(bw * bh), MEMF_ANY | MEMF_CLEAR))) return;
-    zt_draw(z, s, n, cov, bw, bh, bw, 0, base - y);
-    if (fl & LT_BOLD) zt_draw(z, s, n, cov, bw, bh, bw, 1, base - y);
+    zt_draw(z, s, n, zf, cov, bw, bh, bw, 0, base - y);
+    c0 = xa - rx;
+    c1 = xb - rx;
+    /* the run's last part takes the ink past the last advance */
+    if (c1 >= rw) c1 = bw;
+    if (c0 < 0) c0 = 0;
+    if (c1 > bw) c1 = bw;
     GetRGB32(cm, pen, 1, rgb);
     if (!lt_cgx_base) lt_cgx_base = OpenLibrary((CONST_STRPTR)"cybergraphics.library", 0);
-    if (lt_cgx_base && GetBitMapAttr(rp->BitMap, BMA_DEPTH) > 8) {
-        UBYTE *px = (UBYTE *)AllocVec((ULONG)(bw * bh * 3), MEMF_ANY);
+    if (c1 > c0 && lt_cgx_base && GetBitMapAttr(rp->BitMap, BMA_DEPTH) > 8) {
+        LONG pw = c1 - c0;
+        UBYTE *px = (UBYTE *)AllocVec((ULONG)(pw * bh * 3), MEMF_ANY);
         if (px) {
             ULONG pr = rgb[0] >> 24, pg = rgb[1] >> 24, pb = rgb[2] >> 24;
-            ReadPixelArray(px, 0, 0, bw * 3, rp, x, y, bw, bh, RECTFMT_RGB);
-            for (i = 0; i < bw * bh; i++) {
-                ULONG a = cov[i];
-                UBYTE *p = px + i * 3;
-                if (!a) continue;
-                p[0] = (UBYTE)((p[0] * (255 - a) + pr * a) / 255);
-                p[1] = (UBYTE)((p[1] * (255 - a) + pg * a) / 255);
-                p[2] = (UBYTE)((p[2] * (255 - a) + pb * a) / 255);
-            }
-            WritePixelArray(px, 0, 0, bw * 3, rp, x, y, bw, bh, RECTFMT_RGB);
+            ReadPixelArray(px, 0, 0, pw * 3, rp, rx + c0, y, pw, bh, RECTFMT_RGB);
+            for (j = 0; j < bh; j++)
+                for (i = 0; i < pw; i++) {
+                    ULONG a = cov[j * bw + c0 + i];
+                    UBYTE *p = px + (j * pw + i) * 3;
+                    if (!a) continue;
+                    p[0] = (UBYTE)((p[0] * (255 - a) + pr * a) / 255);
+                    p[1] = (UBYTE)((p[1] * (255 - a) + pg * a) / 255);
+                    p[2] = (UBYTE)((p[2] * (255 - a) + pb * a) / 255);
+                }
+            WritePixelArray(px, 0, 0, pw * 3, rp, rx + c0, y, pw, bh, RECTFMT_RGB);
             FreeVec(px);
         }
-    } else {
+    } else if (c1 > c0) {
         for (j = 0; j < bh; j++)
-            for (i = 0; i < bw; i++)
-                if (cov[j * bw + i] >= 128) WritePixel(rp, x + i, y + j);
+            for (i = c0; i < c1; i++)
+                if (cov[j * bw + i] >= 128) WritePixel(rp, rx + i, y + j);
     }
     if ((fl & LT_RUN_LINK) && !(fl & LT_NOUNDERLINE)) {
-        Move(rp, x, base + 1);
-        Draw(rp, x + w - 1, base + 1);
+        Move(rp, xa, base + 1);
+        Draw(rp, xb - 1, base + 1);
     }
     FreeVec(cov);
 }
@@ -336,8 +355,16 @@ static void draw_line(struct Linktext_DATA *d, Object *obj, struct lt_rp *r, ULO
     ULONG sb = d->sel_anchor < d->sel_caret ? d->sel_caret : d->sel_anchor;
 
     while ((n = lt_run(d->content, l, pos, sa, sb, &fl)) != 0) {
-        LONG w = measure(r, d->content->text + pos, n, fl & LT_FONT_FLAGS);
+        LONG w, x0 = column_left(d, obj) + l->x, end = (LONG)(l->start + l->shown);
         UBYTE style = 0;
+        if (d->utf8) {
+            /* places from the line as it is drawn: runs of one font, each
+               shaped whole */
+            x = x0 + lt_line_x(d->content, l->start, (lt_ulong)end, pos, measure, r);
+            w = x0 + lt_line_x(d->content, l->start, (lt_ulong)end, pos + n, measure, r) - x;
+        } else {
+            w = measure(r, d->content->text + pos, n, fl & LT_FONT_FLAGS);
+        }
         if (fl & LT_RUN_SEL) {
             SetAPen(rp, _pens(obj)[MPEN_FILL]);
             RectFill(rp, x, y, x + w - 1, y + th - 1);
@@ -359,7 +386,10 @@ static void draw_line(struct Linktext_DATA *d, Object *obj, struct lt_rp *r, ULO
         if (fl & LT_BOLD) style |= FSF_BOLD;
         if ((fl & LT_RUN_LINK) && !(fl & LT_NOUNDERLINE)) style |= FSF_UNDERLINED;
         if (d->utf8) {
-            draw_utf8(d, obj, rp, x, y, base, w, th, d->content->text + pos, n, fl);
+            lt_ulong ra, rb;
+            lt_font_run(d->content, l->start, (lt_ulong)end, pos, &ra, &rb);
+            draw_utf8(d, obj, rp, x0 + lt_line_x(d->content, l->start, (lt_ulong)end, ra, measure, r), x, x + w,
+                      y, base, th, d->content->text + ra, (ULONG)(rb - ra), fl);
         } else {
             SetSoftStyle(rp, style, AskSoftStyle(rp));
             Move(rp, x, base);
@@ -1063,7 +1093,7 @@ IPTR Linktext__MUIM_Linktext_SetDocument(Class *cl, Object *obj, struct MUIP_Lin
     if (status == LT_OK)
         c = lt_document_new((const char *)msg->Text, msg->Length == (ULONG)~0UL ? (lt_ulong)-1 : msg->Length,
                             in, msg->SpanCount, bin, msg->BlockCount, &status);
-    if (c) lt_set_utf8(c, d->utf8);
+    if (c) lt_set_utf8(c, d->utf8, xin);
     if (in != stack) lt_free(in);
     if (bin != bstack) lt_free(bin);
     if (!c) return status;           /* the status numbers are the same */
@@ -1427,6 +1457,29 @@ static const char *const default_fallbacks[] = {
     "FONTS:TrueType/OpenSans-Regular.ttf", "FONTS:TrueType/VeraSans.ttf", NULL
 };
 
+int linktext_utf8_fonts(CONST_STRPTR const *fallbacks, char *why, ULONG whylen)
+{
+    const char *paths[ZT_MAX_FACES];
+    int n = 0, i;
+    struct zt_font *z;
+    for (i = 0; fallbacks && fallbacks[i] && n < ZT_MAX_FACES; i++) paths[n++] = (const char *)fallbacks[i];
+    for (i = 0; default_fallbacks[i] && n < ZT_MAX_FACES; i++) paths[n++] = default_fallbacks[i];
+    if (!(z = zt_font_open(paths, n, 13))) {
+        if (why && whylen) {
+            const char *m = "no outline font for UTF-8 text: none of the fallback fonts opened "
+                            "(FONTS:TrueType/OpenSans-Regular.ttf, FONTS:TrueType/VeraSans.ttf), "
+                            "or freetype2.library is missing";
+            ULONG k = 0;
+            while (m[k] && k + 1 < whylen) { why[k] = m[k]; k++; }
+            why[k] = 0;
+        }
+        return 0;
+    }
+    zt_font_close(z);
+    if (why && whylen) why[0] = 0;
+    return 1;
+}
+
 /* The face sets: the font's own file, then the application's fallbacks,
    then the defaults; Large is the normal set a quarter larger. */
 static struct zt_font *open_set(struct Linktext_DATA *d, struct TextFont *tf, int px)
@@ -1462,7 +1515,18 @@ IPTR Linktext__MUIM_Setup(Class *cl, Object *obj, struct MUIP_Setup *msg)
     LONG above, below;
     if (!DoSuperMethodA(cl, obj, (Msg)msg)) return FALSE;
     fixed_font_setup(d, obj);
-    if (d->utf8) utf8_fonts_setup(d, obj);
+    if (d->utf8) {
+        utf8_fonts_setup(d, obj);
+        if (!d->zf[0]) {
+            /* UTF-8 with nothing to draw it with: refuse, rather than a
+               view that shows nothing as if it were right. The window
+               does not open; zk_linktext_utf8_fonts() says why first. */
+            utf8_fonts_cleanup(d);
+            fixed_font_cleanup(d);
+            DoSuperMethod(cl, obj, MUIM_Cleanup);
+            return FALSE;
+        }
+    }
     /* One line height for both fonts, on a common baseline. */
     f = _font(obj);
     x = d->fixed ? d->fixed : f;

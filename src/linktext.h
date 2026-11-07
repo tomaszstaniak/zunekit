@@ -71,10 +71,12 @@
    TrueType/OpenType files (their .otag in FONTS:), then the fallback faces;
    a character no face has shows as a box and stays in the text. A copy
    puts FTXT with a UTF8 chunk and a Latin-1 CHRS copy on the clipboard.
-   Not done: shaping of complex scripts, right-to-left text, colour glyphs;
-   combining marks are drawn where FreeType's advance puts them. When the
-   window font has no outline file and no fallback opens, the class draws
-   nothing for the text; check the window fonts first. */
+   Not done: right-to-left text, colour glyphs.
+   When neither the window font's file nor any fallback opens, MUIM_Setup
+   fails and the window does not open: there is nothing to draw the text
+   with, and the class does not show an empty view instead. Check first
+   (zunekit: zk_linktext_utf8_fonts) and tell the user. Text is shaped with
+   HarfBuzz (kerning, marks, ligatures) left to right. */
 #define MUIA_Linktext_UTF8       (MUIB_Linktext | 0x0E)
 /* [I..] STRPTR *: NULL-ended font files tried after the window fonts' own,
    in order, for characters they lack (default: FONTS:TrueType/OpenSans-
