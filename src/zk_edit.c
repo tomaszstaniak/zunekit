@@ -31,7 +31,6 @@ static struct Library *ze_cgx_base;
 #include "zk_edit.h"
 #include "zk_edit_core.h"
 #include "zk_text_aros.h"
-#include "utf8proc.h"
 
 #ifndef MAKE_ID
 #define MAKE_ID(a, b, c, d) ((ULONG)(a) << 24 | (ULONG)(b) << 16 | (ULONG)(c) << 8 | (ULONG)(d))
@@ -51,6 +50,7 @@ struct ZkEditData
     CONST_STRPTR *fallbacks;
     BOOL fixed, readonly, single, setup, active, dragging;
     LONG lines;
+    ULONG maxbytes;
     unsigned long laid_rev;
     LONG laid_w;
     LONG top, hscroll, total, pub_top;
@@ -129,6 +129,18 @@ static int insert_text(Object *obj, struct ZkEditData *d, const char *s, size_t 
 {
     int r;
     if (d->readonly) return 0;
+    if (d->maxbytes) {
+        size_t len, a, b, room;
+        ze_text(d->doc, &len);
+        ze_selection(d->doc, &a, &b);
+        room = len - (b - a) >= d->maxbytes ? 0 : d->maxbytes - (len - (b - a));
+        if (n > room) {
+            /* what fits, to a cluster boundary (a lone accent or half an
+               emoji sequence is not put in) */
+            n = zt_valid(s, n) ? zt_cluster_start(s, n, room) : 0;
+            if (!n) { say(obj, d, "The field is full"); DisplayBeep(NULL); return 0; }
+        }
+    }
     if (d->single && (memchr(s, '\n', n) || memchr(s, '\r', n))) {
         char *c = (char *)malloc(n ? n : 1);
         size_t i, k = 0;
@@ -157,28 +169,13 @@ static int iff_open(void)
 static int clip_write(const char *s, size_t n)
 {
     struct IFFHandle *iff;
-    UBYTE *local;
-    utf8proc_uint8_t *nfc = NULL;
-    const char *c = s;
-    size_t i = 0, k = 0, cn = n;
+    char *local;
+    size_t k;
     int ok = 0;
     if (!iff_open()) return 0;
-    if (!(local = (UBYTE *)AllocVec(n + 1, MEMF_ANY))) return 0;
-    /* the 8-bit copy from the composed form: e + U+0301 is one character
-       there (the UTF8 chunk keeps the bytes as they are) */
-    {
-        utf8proc_ssize_t r = utf8proc_map((const utf8proc_uint8_t *)s, (utf8proc_ssize_t)n, &nfc,
-                                          UTF8PROC_STABLE | UTF8PROC_COMPOSE);
-        if (r >= 0 && nfc) { c = (const char *)nfc; cn = (size_t)r; }
-    }
-    while (i < cn) {
-        size_t len;
-        unsigned long cp = zt_decode(c, cn, i, &len);
-        /* joiners and variation selectors have no 8-bit form: left out */
-        if (cp != 0x200d && !(cp >= 0xfe00 && cp <= 0xfe0f)) local[k++] = zt_to_local(cp);
-        i += len;
-    }
-    free(nfc);
+    /* the UTF8 chunk keeps the bytes as they are; the CHRS copy is
+       zk_text_aros's (composed, in the system's set) */
+    if (!(local = zt_local_copy(s, n, &k))) return 0;
     if ((iff = AllocIFF())) {
         if ((iff->iff_Stream = (IPTR)OpenClipboard(0))) {
             InitIFFasClip(iff);
@@ -195,7 +192,7 @@ static int clip_write(const char *s, size_t n)
         }
         FreeIFF(iff);
     }
-    FreeVec(local);
+    free(local);
     return ok;
 }
 
@@ -558,6 +555,7 @@ static IPTR ZkEdit_New(struct IClass *cl, Object *obj, struct opSet *msg)
     d->single = GetTagData(MUIA_ZkEdit_SingleLine, FALSE, msg->ops_AttrList) != 0;
     d->fallbacks = (CONST_STRPTR *)GetTagData(MUIA_ZkEdit_FallbackFonts, 0, msg->ops_AttrList);
     d->lines = (LONG)GetTagData(MUIA_ZkEdit_Lines, d->single ? 1 : 5, msg->ops_AttrList);
+    d->maxbytes = (ULONG)GetTagData(MUIA_ZkEdit_MaxBytes, 0, msg->ops_AttrList);
     if (d->lines < 1) d->lines = 1;
     if ((text = (STRPTR)GetTagData(MUIA_ZkEdit_Contents, 0, msg->ops_AttrList)))
         ze_set_text(d->doc, (const char *)text, strlen((const char *)text));
@@ -574,7 +572,9 @@ static IPTR ZkEdit_Dispose(struct IClass *cl, Object *obj, Msg msg)
 
 static IPTR set_text(Object *obj, struct ZkEditData *d, const char *s, size_t n)
 {
-    int r = ze_set_text(d->doc, s, n);
+    int r;
+    if (d->maxbytes && n > d->maxbytes) { say(obj, d, "Refused: longer than the field takes"); return 0; }
+    r = ze_set_text(d->doc, s, n);
     if (result(obj, d, r)) { d->top = 0; d->hscroll = 0; changed(obj, d, TRUE); }
     return (IPTR)(LONG)r;
 }
@@ -590,6 +590,14 @@ static IPTR ZkEdit_Set(struct IClass *cl, Object *obj, struct opSet *msg)
             else set_text(obj, d, "", 0);
             break;
         case MUIA_ZkEdit_ReadOnly: d->readonly = tag->ti_Data != 0; break;
+        case MUIA_ZkEdit_Caret: {
+            size_t len;
+            ze_text(d->doc, &len);
+            ze_set_caret(d->doc, tag->ti_Data > len ? len : (size_t)tag->ti_Data, 0);
+            d->goal = -1;
+            changed(obj, d, FALSE);
+            break;
+        }
         case MUIA_ZkEdit_Top:
             if (d->setup && (LONG)tag->ti_Data != d->top) {
                 d->top = (LONG)tag->ti_Data;
@@ -617,6 +625,7 @@ static IPTR ZkEdit_Get(struct IClass *cl, Object *obj, struct opGet *msg)
     case MUIA_ZkEdit_Total: *store = (IPTR)d->total; return TRUE;
     case MUIA_ZkEdit_Visible: *store = d->setup ? (IPTR)(_mheight(obj) - 2 * PADY) : 0; return TRUE;
     case MUIA_ZkEdit_Message: *store = (IPTR)d->message; return TRUE;
+    case MUIA_ZkEdit_Caret: *store = (IPTR)ze_caret(d->doc); return TRUE;
     }
     return DoSuperMethodA(cl, obj, (Msg)msg);
 }
@@ -747,6 +756,8 @@ void zk_edit_exit(void)
     if (ze_cgx_base) { CloseLibrary(ze_cgx_base); ze_cgx_base = NULL; }
     zt_aros_close();
 }
+
+struct MUI_CustomClass *zk_edit_class(void) { return ZkEditClass; }
 
 Object *zk_edit_new(Object **edit, int scroller, const struct TagItem *extra)
 {

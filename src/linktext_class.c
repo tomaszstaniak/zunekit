@@ -23,6 +23,7 @@
 #include <graphics/text.h>
 #include <clib/alib_protos.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define __IFFPARSE_NOLIBBASE__
 #define __IFFPARSE_LIBBASE iff_base
@@ -667,23 +668,17 @@ static BOOL clip_write(const char *s, ULONG n)
     return ok;
 }
 
-/* UTF-8: FTXT with a UTF8 chunk, and a CHRS copy in Latin-1 for readers
-   of 8-bit text ('?' for what Latin-1 has not). */
+/* UTF-8: FTXT with a UTF8 chunk, and a CHRS copy for readers of 8-bit
+   text in the system's set (zt_local_copy, as zk_edit writes it). */
 static BOOL clip_write_utf8(const char *s, ULONG n)
 {
     struct Library *iff_base = OpenLibrary((CONST_STRPTR)"iffparse.library", 39);
     struct IFFHandle *iff;
-    UBYTE *latin;
-    ULONG i = 0, k = 0;
+    char *latin;
+    size_t k;
     BOOL ok = FALSE;
     if (!iff_base) return FALSE;
-    if (!(latin = (UBYTE *)AllocVec(n + 1, MEMF_ANY))) { CloseLibrary(iff_base); return FALSE; }
-    while (i < n) {
-        size_t len;
-        unsigned long cp = zt_decode(s, n, i, &len);
-        latin[k++] = cp < 256 ? (UBYTE)cp : '?';
-        i += (ULONG)len;
-    }
+    if (!(latin = zt_local_copy(s, n, &k))) { CloseLibrary(iff_base); return FALSE; }
     if ((iff = AllocIFF())) {
         if ((iff->iff_Stream = (IPTR)OpenClipboard(0))) {
             InitIFFasClip(iff);
@@ -702,7 +697,7 @@ static BOOL clip_write_utf8(const char *s, ULONG n)
         }
         FreeIFF(iff);
     }
-    FreeVec(latin);
+    free(latin);
     CloseLibrary(iff_base);
     return ok;
 }

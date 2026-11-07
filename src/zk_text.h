@@ -127,6 +127,10 @@ size_t zt_hit(zt_font *f, const char *s, size_t n, long x, unsigned flags);
 long zt_draw(zt_font *f, const char *s, size_t n, unsigned flags, unsigned char *cov, int w, int h,
              int stride, long x, long y);
 
+/* s[0..n) in the composed form (NFC) in a new buffer (*outn bytes, NUL
+   after them; free() it). NULL when s is not UTF-8 or out of memory. */
+char *zt_compose(const char *s, size_t n, size_t *outn);
+
 /* Counters since the font was opened: clusters shaped from a fallback face,
    clusters no face has, shapings done (not taken from the cache). */
 void zt_font_counts(const zt_font *f, unsigned long *fallback, unsigned long *missing, unsigned long *shaped);

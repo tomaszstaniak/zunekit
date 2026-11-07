@@ -41,6 +41,13 @@ void zt_blit(struct RastPort *rp, struct ColorMap *cm, ULONG pen, const UBYTE *c
 size_t zt_from_local(UBYTE ch, char *utf8);
 UBYTE zt_to_local(unsigned long cp);
 
+/* An 8-bit copy of s[0..n) in the system's set, for a clipboard's CHRS
+   chunk beside its UTF8: made from the composed form (e + U+0301 is one
+   character there), joiners and variation selectors left out, '?' for
+   what the set has not. malloc'd, *outn bytes and a NUL; NULL when out of
+   memory. */
+char *zt_local_copy(const char *s, size_t n, size_t *outn);
+
 /* Closes the libraries opened here (codesets, cybergraphics); the next
    call opens them again. Call from a class's exit. */
 void zt_aros_close(void);

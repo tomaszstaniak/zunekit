@@ -18,10 +18,10 @@
  * PageDown, Amiga+A select all, C copy, X cut, V paste, Z undo, Shift+Z or
  * Y redo. Tab is left to Zune.
  *
- * Compile src/zk_edit.c, src/zk_edit_core.c, src/zk_text.c,
- * src/zk_text_aros.c, third_party/utf8proc/utf8proc.c and HarfBuzz
- * (third_party/harfbuzz/src/harfbuzz.cc, C++11), link -lfreetype2
- * -lstdc++. */
+ * Compile src/zk_edit.c and src/zk_edit_core.c with -I src; link the text
+ * layer, libzktext.a from scripts/build-textlib.sh, and -lfreetype2 -lm.
+ * Fonts: zk_edit_fonts first, so a window that cannot draw its text says
+ * so instead of opening. */
 #ifndef ZK_EDIT_H
 #define ZK_EDIT_H
 
@@ -63,6 +63,15 @@
 #define MUIA_ZkEdit_FallbackFonts (ZKEDIT_TAGBASE + 11)
 /* I.. LONG    lines high (default 5; 1 with SingleLine). */
 #define MUIA_ZkEdit_Lines         (ZKEDIT_TAGBASE + 12)
+/* .SG ULONG   the caret as a byte offset into Contents; set moves it there
+               (to the cluster start at or before it, the end at most) and
+               clears the selection. */
+#define MUIA_ZkEdit_Caret         (ZKEDIT_TAGBASE + 13)
+/* I.. ULONG   at most this many bytes of UTF-8 (0: no limit), as
+               MUIA_String_MaxLen less its NUL. Typing or pasting past it
+               takes what fits, cut at a cluster boundary; Contents and
+               SetText are not cut (a longer text is refused). */
+#define MUIA_ZkEdit_MaxBytes      (ZKEDIT_TAGBASE + 14)
 
 /* Replaces the text: 1, -2 not UTF-8, -1 out of memory (the old stays). */
 #define MUIM_ZkEdit_SetText       (ZKEDIT_TAGBASE + 0x100)
@@ -84,6 +93,10 @@ void zk_edit_exit(void);
 /* An editor in *edit; what the window tree takes is returned (with a
    scroller, a group). extra: more tags, may be NULL. NULL on failure. */
 Object *zk_edit_new(Object **edit, int scroller, const struct TagItem *extra);
+/* The class itself, for a subclass (MUI_CreateCustomClass with it as the
+   super class); valid between zk_edit_init and zk_edit_exit. A subclass's
+   event handler with a priority above 0 sees keys before the editor. */
+struct MUI_CustomClass *zk_edit_class(void);
 /* Whether the class can draw Unicode text here (a font opens): 1, or 0
    and the reason. A window with an editor that cannot does not open. */
 int zk_edit_fonts(CONST_STRPTR const *fallbacks, char *why, ULONG whylen);

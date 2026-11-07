@@ -673,3 +673,13 @@ void zt_font_counts(const zt_font *f, unsigned long *fallback, unsigned long *mi
     *missing = f->missing;
     *shaped = f->shaped;
 }
+
+char *zt_compose(const char *s, size_t n, size_t *outn)
+{
+    utf8proc_uint8_t *out = NULL;
+    utf8proc_ssize_t r = utf8proc_map((const utf8proc_uint8_t *)s, (utf8proc_ssize_t)n, &out,
+                                      UTF8PROC_STABLE | UTF8PROC_COMPOSE);
+    if (r < 0) { free(out); return NULL; }
+    if (outn) *outn = (size_t)r;
+    return (char *)out;
+}

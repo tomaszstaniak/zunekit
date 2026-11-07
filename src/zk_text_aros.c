@@ -7,6 +7,7 @@
 #include <graphics/gfx.h>
 #include <libraries/codesets.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define __CYBERGRAPHICS_NOLIBBASE__
 #define __CYBERGRAPHICS_LIBBASE zt_cgx_base
@@ -197,4 +198,23 @@ UBYTE zt_to_local(unsigned long cp)
         return r;
     }
     return cp < 256 ? (UBYTE)cp : '?';
+}
+
+char *zt_local_copy(const char *s, size_t n, size_t *outn)
+{
+    size_t cn, i = 0, k = 0;
+    char *nfc = zt_compose(s, n, &cn), *out;
+    const char *c = nfc ? nfc : s;
+    if (!nfc) cn = n;
+    if (!(out = (char *)malloc(cn + 1))) { free(nfc); return NULL; }
+    while (i < cn) {
+        size_t len;
+        unsigned long cp = zt_decode(c, cn, i, &len);
+        if (cp != 0x200d && !(cp >= 0xfe00 && cp <= 0xfe0f)) out[k++] = (char)zt_to_local(cp);
+        i += len;
+    }
+    out[k] = 0;
+    free(nfc);
+    *outn = k;
+    return out;
 }
