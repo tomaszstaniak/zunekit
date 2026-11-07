@@ -11,10 +11,16 @@ extern ULONG Linktext_DataSize(void);
 extern APTR Linktext_Entry(void);
 
 static struct MUI_CustomClass *mcc;
+static int layer;                 /* this class's use of the text layer */
 
 int zk_linktext_init(void)
 {
-    if (!mcc) mcc = MUI_CreateCustomClass(NULL, (ClassID)MUIC_Area, NULL, Linktext_DataSize(), Linktext_Entry());
+    /* The UTF-8 mode draws through the text layer; without freetype2 the
+       class still works in its 8-bit mode, and a UTF-8 view refuses Setup. */
+    if (!mcc) {
+        mcc = MUI_CreateCustomClass(NULL, (ClassID)MUIC_Area, NULL, Linktext_DataSize(), Linktext_Entry());
+        if (mcc && !layer) layer = zt_layer_open() == ZT_OK;
+    }
     return mcc != NULL;
 }
 
@@ -22,7 +28,8 @@ void zk_linktext_exit(void)
 {
     if (mcc) MUI_DeleteCustomClass(mcc);
     mcc = NULL;
-    zt_aros_close();
+    if (layer) zt_layer_close();
+    layer = 0;
 }
 
 Object *zk_linktext_new(Object **view, int scroller, const struct TagItem *extra)
@@ -48,8 +55,8 @@ Object *zk_linktext_new(Object **view, int scroller, const struct TagItem *extra
     return g;
 }
 
-int linktext_utf8_fonts(CONST_STRPTR const *fallbacks, char *why, ULONG whylen);
-int zk_linktext_utf8_fonts(CONST_STRPTR const *fallbacks, char *why, ULONG whylen)
+int linktext_utf8_fonts(const void *set, char *why, ULONG whylen);
+int zk_linktext_utf8_fonts(const zt_fontset *set, char *why, ULONG whylen)
 {
-    return linktext_utf8_fonts(fallbacks, why, whylen);
+    return linktext_utf8_fonts(set, why, whylen);
 }

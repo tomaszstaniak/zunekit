@@ -72,6 +72,10 @@
                takes what fits, cut at a cluster boundary; Contents and
                SetText are not cut (a longer text is refused). */
 #define MUIA_ZkEdit_MaxBytes      (ZKEDIT_TAGBASE + 14)
+/* I.. const zt_fontset *  proportional, monospace and fallback faces
+               (zk_text_aros.h); replaces FallbackFonts. The caller's,
+               living as long as the object. */
+#define MUIA_ZkEdit_FontSet       (ZKEDIT_TAGBASE + 15)
 
 /* Replaces the text: 1, -2 not UTF-8, -1 out of memory (the old stays). */
 #define MUIM_ZkEdit_SetText       (ZKEDIT_TAGBASE + 0x100)
@@ -97,8 +101,11 @@ Object *zk_edit_new(Object **edit, int scroller, const struct TagItem *extra);
    super class); valid between zk_edit_init and zk_edit_exit. A subclass's
    event handler with a priority above 0 sees keys before the editor. */
 struct MUI_CustomClass *zk_edit_class(void);
-/* Whether the class can draw Unicode text here (a font opens): 1, or 0
-   and the reason. A window with an editor that cannot does not open. */
-int zk_edit_fonts(CONST_STRPTR const *fallbacks, char *why, ULONG whylen);
+/* Whether the class can draw Unicode text here with set (NULL: the
+   system's): ZT_OK (0), else ZT_ERR_LIBRARY (no freetype2.library) or
+   ZT_ERR_FONT (no face, proportional or fixed, opens) with the reason in
+   why. A window with an editor that cannot does not open. */
+struct zt_fontset;
+int zk_edit_fonts(const struct zt_fontset *set, char *why, ULONG whylen);
 
 #endif

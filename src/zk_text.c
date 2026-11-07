@@ -6,28 +6,11 @@
 #ifdef __AROS__
 #include <proto/exec.h>
 #include <proto/freetype2.h>
-/* freetype2.library, opened with the first font and closed with the last;
-   the count changes under Forbid() so fonts of several tasks can come and
-   go. */
-struct Library *FreeType2Base;
-static int ft_users;
-static int ft_open(void)
-{
-    int ok = 1;
-    Forbid();
-    if (!ft_users && !(FreeType2Base = OpenLibrary((CONST_STRPTR)"freetype2.library", 0))) ok = 0;
-    if (ok) ft_users++;
-    Permit();
-    return ok;
-}
-static void ft_close(void)
-{
-    struct Library *b = NULL;
-    Forbid();
-    if (ft_users && !--ft_users) { b = FreeType2Base; FreeType2Base = NULL; }
-    Permit();
-    if (b) CloseLibrary(b);
-}
+/* freetype2.library is the layer's (zk_text_aros.c, zt_layer_open): fonts
+   open only while it is. */
+extern struct Library *FreeType2Base;
+static int ft_open(void) { return FreeType2Base != NULL; }
+static void ft_close(void) {}
 #else
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -682,4 +665,55 @@ char *zt_compose(const char *s, size_t n, size_t *outn)
     if (r < 0) { free(out); return NULL; }
     if (outn) *outn = (size_t)r;
     return (char *)out;
+}
+
+size_t zt_keys_decode(const unsigned char *b, size_t n, size_t (*dec)(void *u, unsigned char c, char *utf8),
+                      void *u, char *out, size_t cap)
+{
+    size_t i, k = 0;
+    for (i = 0; i < n; i++) {
+        char one[4];
+        size_t w = dec(u, b[i], one), len;
+        unsigned long cp;
+        if (!w || w > 4) continue;                       /* nothing there in the set */
+        cp = zt_decode(one, w, 0, &len);
+        if (len != w) continue;                          /* not one character */
+        /* sorted as a character: C0, DEL and C1 controls are not text */
+        if (cp < 0x20 || (cp >= 0x7f && cp < 0xa0)) continue;
+        if (k + w > cap) break;
+        memcpy(out + k, one, w);
+        k += w;
+    }
+    return k;
+}
+
+char *zt_fold(const char *s, size_t n, size_t *outn)
+{
+    utf8proc_uint8_t *out = NULL;
+    utf8proc_ssize_t r = utf8proc_map((const utf8proc_uint8_t *)s, (utf8proc_ssize_t)n, &out,
+                                      UTF8PROC_STABLE | UTF8PROC_COMPOSE | UTF8PROC_COMPAT | UTF8PROC_CASEFOLD);
+    if (r < 0) { free(out); return NULL; }
+    if (outn) *outn = (size_t)r;
+    return (char *)out;
+}
+
+int zt_contains_folded(const char *hay, size_t hn, const char *needle, size_t nn)
+{
+    size_t fh, fn;
+    char *h, *k;
+    int r;
+    if (!nn) return 1;
+    if (!(k = zt_fold(needle, nn, &fn))) return -1;
+    if (!(h = zt_fold(hay, hn, &fh))) { free(k); return -1; }
+    r = 0;
+    if (!fn) r = 1;
+    else if (fh >= fn) {
+        size_t i;
+        /* at character starts only: a match never begins inside one */
+        for (i = 0; i + fn <= fh && !r; i++)
+            if (((unsigned char)h[i] & 0xc0) != 0x80 && !memcmp(h + i, k, fn)) r = 1;
+    }
+    free(h);
+    free(k);
+    return r;
 }

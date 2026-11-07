@@ -21,12 +21,13 @@ void zk_linktext_exit(void);
  * view. extra (may be NULL) are more tags for the view. NULL on failure. */
 Object *zk_linktext_new(Object **view, int scroller, const struct TagItem *extra);
 
-/* Whether a view with MUIA_Linktext_UTF8 can draw: 1 when at least one of
-   the fallback fonts (fallbacks, NULL-ended, may be NULL; then the
-   defaults) opens through freetype2.library. 0 and the reason in why when
-   not: such a view refuses to be set up and its window does not open, so
+/* Whether a view with MUIA_Linktext_UTF8 can draw with set (NULL: the
+   system's, zk_text_aros.h): ZT_OK (0), or ZT_ERR_LIBRARY (no
+   freetype2.library) or ZT_ERR_FONT (no face opens) with the reason in
+   why. Such a view refuses to be set up and its window does not open, so
    say the reason to the user instead. The window font's own file comes on
    top at Setup. */
-int zk_linktext_utf8_fonts(CONST_STRPTR const *fallbacks, char *why, ULONG whylen);
+struct zt_fontset;
+int zk_linktext_utf8_fonts(const struct zt_fontset *set, char *why, ULONG whylen);
 
 #endif

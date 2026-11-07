@@ -17,20 +17,21 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "zk_text_aros.h"
+
+/* iffparse.library is opened for each clipboard use (iff below, a local);
+   cybergraphics.library is the text layer's (zk_text_aros.h). */
 #define __IFFPARSE_NOLIBBASE__
-#define __IFFPARSE_LIBBASE ze_iff_base
-static struct Library *ze_iff_base;
+#define __IFFPARSE_LIBBASE iff
 #include <proto/iffparse.h>
 
 #define __CYBERGRAPHICS_NOLIBBASE__
-#define __CYBERGRAPHICS_LIBBASE ze_cgx_base
-static struct Library *ze_cgx_base;
+#define __CYBERGRAPHICS_LIBBASE zt_cgx_base
 #include <proto/cybergraphics.h>
 #include <cybergraphx/cybergraphics.h>
 
 #include "zk_edit.h"
 #include "zk_edit_core.h"
-#include "zk_text_aros.h"
 
 #ifndef MAKE_ID
 #define MAKE_ID(a, b, c, d) ((ULONG)(a) << 24 | (ULONG)(b) << 16 | (ULONG)(c) << 8 | (ULONG)(d))
@@ -48,6 +49,7 @@ struct ZkEditData
     struct TextFont *fixed_tf;
     Object *fixed_obj;
     CONST_STRPTR *fallbacks;
+    const zt_fontset *fontset;
     BOOL fixed, readonly, single, setup, active, dragging;
     LONG lines;
     ULONG maxbytes;
@@ -61,6 +63,7 @@ struct ZkEditData
 };
 
 static struct MUI_CustomClass *ZkEditClass;
+static int layer;                          /* the class's use of the text layer */
 
 /* ------------------------------------------------------------- helpers */
 
@@ -159,40 +162,36 @@ static int insert_text(Object *obj, struct ZkEditData *d, const char *s, size_t 
 
 /* ----------------------------------------------------------- clipboard */
 
-static int iff_open(void)
-{
-    if (!ze_iff_base) ze_iff_base = OpenLibrary((CONST_STRPTR)"iffparse.library", 39);
-    return ze_iff_base != NULL;
-}
-
 /* FTXT with a UTF8 chunk and a CHRS copy in the system's set. */
 static int clip_write(const char *s, size_t n)
 {
-    struct IFFHandle *iff;
+    struct Library *iff = OpenLibrary((CONST_STRPTR)"iffparse.library", 39);
+    struct IFFHandle *h;
     char *local;
     size_t k;
     int ok = 0;
-    if (!iff_open()) return 0;
+    if (!iff) return 0;
     /* the UTF8 chunk keeps the bytes as they are; the CHRS copy is
        zk_text_aros's (composed, in the system's set) */
-    if (!(local = zt_local_copy(s, n, &k))) return 0;
-    if ((iff = AllocIFF())) {
-        if ((iff->iff_Stream = (IPTR)OpenClipboard(0))) {
-            InitIFFasClip(iff);
-            if (!OpenIFF(iff, IFFF_WRITE)) {
-                ok = !PushChunk(iff, MAKE_ID('F','T','X','T'), MAKE_ID('F','O','R','M'), IFFSIZE_UNKNOWN)
-                     && !PushChunk(iff, 0, MAKE_ID('C','H','R','S'), (LONG)k)
-                     && WriteChunkBytes(iff, local, (LONG)k) == (LONG)k && !PopChunk(iff)
-                     && !PushChunk(iff, 0, MAKE_ID('U','T','F','8'), (LONG)n)
-                     && WriteChunkBytes(iff, (APTR)s, (LONG)n) == (LONG)n && !PopChunk(iff)
-                     && !PopChunk(iff);
-                CloseIFF(iff);
+    if (!(local = zt_local_copy(s, n, &k))) { CloseLibrary(iff); return 0; }
+    if ((h = AllocIFF())) {
+        if ((h->iff_Stream = (IPTR)OpenClipboard(0))) {
+            InitIFFasClip(h);
+            if (!OpenIFF(h, IFFF_WRITE)) {
+                ok = !PushChunk(h, MAKE_ID('F','T','X','T'), MAKE_ID('F','O','R','M'), IFFSIZE_UNKNOWN)
+                     && !PushChunk(h, 0, MAKE_ID('C','H','R','S'), (LONG)k)
+                     && WriteChunkBytes(h, local, (LONG)k) == (LONG)k && !PopChunk(h)
+                     && !PushChunk(h, 0, MAKE_ID('U','T','F','8'), (LONG)n)
+                     && WriteChunkBytes(h, (APTR)s, (LONG)n) == (LONG)n && !PopChunk(h)
+                     && !PopChunk(h);
+                CloseIFF(h);
             }
-            CloseClipboard((struct ClipboardHandle *)iff->iff_Stream);
+            CloseClipboard((struct ClipboardHandle *)h->iff_Stream);
         }
-        FreeIFF(iff);
+        FreeIFF(h);
     }
     free(local);
+    CloseLibrary(iff);
     return ok;
 }
 
@@ -201,28 +200,29 @@ static int clip_write(const char *s, size_t n)
    is none or no memory (*err says which). */
 static char *clip_read(size_t *n, const char **err)
 {
-    struct IFFHandle *iff;
+    struct Library *iff = OpenLibrary((CONST_STRPTR)"iffparse.library", 39);
+    struct IFFHandle *h;
     char *out = NULL;
     *n = 0;
     *err = "the clipboard holds no text";
-    if (!iff_open()) { *err = "no iffparse.library"; return NULL; }
-    if (!(iff = AllocIFF())) { *err = "not enough memory"; return NULL; }
-    if ((iff->iff_Stream = (IPTR)OpenClipboard(0))) {
-        InitIFFasClip(iff);
-        if (!OpenIFF(iff, IFFF_READ)) {
+    if (!iff) { *err = "no iffparse.library"; return NULL; }
+    if (!(h = AllocIFF())) { *err = "not enough memory"; CloseLibrary(iff); return NULL; }
+    if ((h->iff_Stream = (IPTR)OpenClipboard(0))) {
+        InitIFFasClip(h);
+        if (!OpenIFF(h, IFFF_READ)) {
             static const LONG stops[] = { MAKE_ID('F','T','X','T'), MAKE_ID('U','T','F','8'),
                                           MAKE_ID('F','T','X','T'), MAKE_ID('C','H','R','S') };
-            if (!StopChunks(iff, (LONG *)stops, 2)) {
+            if (!StopChunks(h, (LONG *)stops, 2)) {
                 char *utf = NULL, *chrs = NULL;
                 LONG nu = 0, nc = 0;
-                while (!ParseIFF(iff, IFFPARSE_SCAN)) {
-                    struct ContextNode *cn = CurrentChunk(iff);
+                while (!ParseIFF(h, IFFPARSE_SCAN)) {
+                    struct ContextNode *cn = CurrentChunk(h);
                     LONG size = cn ? cn->cn_Size : 0;
                     char **dst = cn && cn->cn_ID == MAKE_ID('U','T','F','8') ? &utf : &chrs;
                     LONG *dn = dst == &utf ? &nu : &nc;
                     if (!cn || size < 0 || (ULONG)size > CLIP_LIMIT || *dst) continue;
                     if (!(*dst = (char *)malloc((size_t)size + 1))) { *err = "not enough memory"; break; }
-                    *dn = ReadChunkBytes(iff, *dst, size);
+                    *dn = ReadChunkBytes(h, *dst, size);
                     if (*dn < 0) *dn = 0;
                 }
                 if (utf && zt_valid(utf, (size_t)nu)) { out = utf; *n = (size_t)nu; utf = NULL; }
@@ -236,11 +236,12 @@ static char *clip_read(size_t *n, const char **err)
                 free(utf);
                 free(chrs);
             }
-            CloseIFF(iff);
+            CloseIFF(h);
         }
-        CloseClipboard((struct ClipboardHandle *)iff->iff_Stream);
+        CloseClipboard((struct ClipboardHandle *)h->iff_Stream);
     } else *err = "the clipboard cannot be opened";
-    FreeIFF(iff);
+    FreeIFF(h);
+    CloseLibrary(iff);
     return out;
 }
 
@@ -349,12 +350,8 @@ static IPTR handle_key(Object *obj, struct ZkEditData *d, struct IntuiMessage *i
     n = MapRawKey(&ie, (STRPTR)mapped, sizeof mapped, NULL);
     if (n > 0) {
         char utf8[64];
-        size_t k = 0;
-        LONG i;
-        /* the keymap gives the system's character set: each byte to UTF-8 */
-        for (i = 0; i < n && k + 4 < sizeof utf8; i++)
-            if (mapped[i] >= 0x20 && mapped[i] != 0x7f && !(mapped[i] >= 0x80 && mapped[i] < 0xa0))
-                k += zt_from_local(mapped[i], utf8 + k);
+        /* the keymap gives the system's set: decoded, then sorted */
+        size_t k = zt_keys_utf8(mapped, (size_t)n, utf8, sizeof utf8);
         if (k) insert_text(obj, d, utf8, k);
     }
     return MUI_EventHandlerRC_Eat;
@@ -463,8 +460,7 @@ static IPTR ZkEdit_Draw(struct IClass *cl, Object *obj, struct MUIP_Draw *msg)
     rgb_of(obj, _pens(obj)[MPEN_TEXT], ink);
     rgb_of(obj, _pens(obj)[MPEN_FILL], selbg);
     rgb_of(obj, _pens(obj)[MPEN_SHINE], selink);
-    if (!ze_cgx_base) ze_cgx_base = OpenLibrary((CONST_STRPTR)"cybergraphics.library", 0);
-    rgb = ze_cgx_base && GetBitMapAttr(_rp(obj)->BitMap, BMA_DEPTH) > 8;
+    rgb = zt_cgx_base && GetBitMapAttr(_rp(obj)->BitMap, BMA_DEPTH) > 8;
     dx = PADX - (d->single ? d->hscroll : 0);
     /* an update draws over what is there: the background first, so no old
        ink, caret or scrolled line stays */
@@ -554,6 +550,7 @@ static IPTR ZkEdit_New(struct IClass *cl, Object *obj, struct opSet *msg)
     d->readonly = GetTagData(MUIA_ZkEdit_ReadOnly, FALSE, msg->ops_AttrList) != 0;
     d->single = GetTagData(MUIA_ZkEdit_SingleLine, FALSE, msg->ops_AttrList) != 0;
     d->fallbacks = (CONST_STRPTR *)GetTagData(MUIA_ZkEdit_FallbackFonts, 0, msg->ops_AttrList);
+    d->fontset = (const zt_fontset *)GetTagData(MUIA_ZkEdit_FontSet, 0, msg->ops_AttrList);
     d->lines = (LONG)GetTagData(MUIA_ZkEdit_Lines, d->single ? 1 : 5, msg->ops_AttrList);
     d->maxbytes = (ULONG)GetTagData(MUIA_ZkEdit_MaxBytes, 0, msg->ops_AttrList);
     if (d->lines < 1) d->lines = 1;
@@ -651,8 +648,13 @@ static IPTR ZkEdit_Setup(struct IClass *cl, Object *obj, Msg msg)
     if (!DoSuperMethodA(cl, obj, msg)) return FALSE;
     tf = _font(obj);
     if (d->fixed) d->fixed_tf = fixed_font(d, obj);
-    d->font = d->fixed ? zt_open_for(d->fixed_tf, d->fixed_tf ? d->fixed_tf->tf_YSize : (tf ? tf->tf_YSize : 13), d->fallbacks, 1)
-                       : zt_open_for(tf, tf ? tf->tf_YSize : 13, d->fallbacks, 0);
+    {
+        zt_fontset own;
+        const zt_fontset *set = d->fontset;
+        if (!set) { own.proportional = NULL; own.monospace = NULL; own.fallbacks = d->fallbacks; set = &own; }
+        d->font = d->fixed ? zt_open_for(d->fixed_tf, d->fixed_tf ? d->fixed_tf->tf_YSize : (tf ? tf->tf_YSize : 13), set, 1, NULL)
+                           : zt_open_for(tf, tf ? tf->tf_YSize : 13, set, 0, NULL);
+    }
     if (!d->font) {
         /* nothing to draw Unicode text with: refuse, rather than an empty
            field that looks right (zk_edit_fonts says why first) */
@@ -745,16 +747,19 @@ BOOPSI_DISPATCHER_END
 int zk_edit_init(void)
 {
     if (ZkEditClass) return 1;
+    /* without the layer (no freetype2.library) the class is still made: an
+       editor then refuses Setup, and zk_edit_fonts has said why */
+    if (!layer) layer = zt_layer_open() == ZT_OK;
     ZkEditClass = MUI_CreateCustomClass(NULL, (ClassID)MUIC_Area, NULL, sizeof(struct ZkEditData), ZkEditDispatcher);
+    if (!ZkEditClass && layer) { zt_layer_close(); layer = 0; }
     return ZkEditClass != NULL;
 }
 
 void zk_edit_exit(void)
 {
     if (ZkEditClass) { MUI_DeleteCustomClass(ZkEditClass); ZkEditClass = NULL; }
-    if (ze_iff_base) { CloseLibrary(ze_iff_base); ze_iff_base = NULL; }
-    if (ze_cgx_base) { CloseLibrary(ze_cgx_base); ze_cgx_base = NULL; }
-    zt_aros_close();
+    if (layer) zt_layer_close();
+    layer = 0;
 }
 
 struct MUI_CustomClass *zk_edit_class(void) { return ZkEditClass; }
@@ -780,7 +785,7 @@ Object *zk_edit_new(Object **edit, int scroller, const struct TagItem *extra)
     return g;
 }
 
-int zk_edit_fonts(CONST_STRPTR const *fallbacks, char *why, ULONG whylen)
+int zk_edit_fonts(const zt_fontset *set, char *why, ULONG whylen)
 {
-    return zt_fonts_usable(fallbacks, why, whylen);
+    return zt_fonts_check(set, why, whylen);
 }

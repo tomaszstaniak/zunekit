@@ -1151,6 +1151,7 @@ static void set_tags(struct Linktext_DATA *d, Object *obj, struct TagItem *tags,
         case MUIA_Linktext_ActionHook: d->hook = (struct Hook *)tag->ti_Data; break;
         case MUIA_Linktext_UTF8:       if (init) d->utf8 = tag->ti_Data != 0; break;
         case MUIA_Linktext_FallbackFonts: if (init) d->fallbacks = (CONST_STRPTR *)tag->ti_Data; break;
+        case MUIA_Linktext_FontSet:    if (init) d->fontset = (const void *)tag->ti_Data; break;
         case MUIA_Linktext_Lines:      if (init && tag->ti_Data) d->want_lines = tag->ti_Data; break;
         case MUIA_Linktext_FixHeight:  if (init) d->fix_height = tag->ti_Data != 0; break;
         case MUIA_Linktext_Scroller:   if (init) d->scroller = (Object *)tag->ti_Data; break;
@@ -1390,19 +1391,22 @@ static UWORD dim_pen(Object *obj)
     return MPEN_HALFSHADOW;
 }
 
-int linktext_utf8_fonts(CONST_STRPTR const *fallbacks, char *why, ULONG whylen)
+int linktext_utf8_fonts(const void *set, char *why, ULONG whylen)
 {
-    return zt_fonts_usable(fallbacks, why, whylen);
+    return zt_fonts_check((const zt_fontset *)set, why, whylen);
 }
 
 static void utf8_fonts_setup(struct Linktext_DATA *d, Object *obj)
 {
     struct TextFont *f = _font(obj);
     int px = f ? f->tf_YSize : 13;
-    d->zf[0] = zt_open_for(f, px, d->fallbacks, 0);
-    /* code: the user's fixed font's own file, else the system's monospace */
-    d->zf[1] = zt_open_for(d->fixed, d->fixed ? d->fixed->tf_YSize : px, d->fallbacks, 1);
-    d->zf[2] = zt_open_for(f, px + (px / 4 > 3 ? px / 4 : 3), d->fallbacks, 0);
+    zt_fontset own;
+    const zt_fontset *set = (const zt_fontset *)d->fontset;
+    if (!set) { own.proportional = NULL; own.monospace = NULL; own.fallbacks = d->fallbacks; set = &own; }
+    d->zf[0] = zt_open_for(f, px, set, 0, NULL);
+    /* code: the user's fixed font's own file, else the set's monospace */
+    d->zf[1] = zt_open_for(d->fixed, d->fixed ? d->fixed->tf_YSize : px, set, 1, NULL);
+    d->zf[2] = zt_open_for(f, px + (px / 4 > 3 ? px / 4 : 3), set, 0, NULL);
 }
 
 static void utf8_fonts_cleanup(struct Linktext_DATA *d)

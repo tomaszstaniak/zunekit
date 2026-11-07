@@ -230,11 +230,86 @@ static void scaling(void)
     free(s);
 }
 
+
+/* Windows-1250 for the bytes the tests use; ISO-8859-1 elsewhere. In 1250,
+   0x8c is Ś and 0x9c ś: printable letters on bytes ISO-8859 keeps for C1
+   controls, so a filter on bytes would lose them. 0x81 is empty there. */
+static size_t cp1250(void *u, unsigned char c, char *out)
+{
+    unsigned long cp;
+    (void)u;
+    switch (c) {
+    case 0x8c: cp = 0x15a; break;
+    case 0x9c: cp = 0x15b; break;
+    case 0xb9: cp = 0x105; break;
+    case 0x81: return 0;
+    default: cp = c; break;
+    }
+    if (cp < 0x80) { out[0] = (char)cp; return 1; }
+    out[0] = (char)(0xc0 | (cp >> 6)); out[1] = (char)(0x80 | (cp & 0x3f));
+    return 2;
+}
+static size_t latin1(void *u, unsigned char c, char *out)
+{
+    (void)u;
+    if (c < 0x80) { out[0] = (char)c; return 1; }
+    out[0] = (char)(0xc0 | (c >> 6)); out[1] = (char)(0x80 | (c & 0x3f));
+    return 2;
+}
+
+static void keys(void)
+{
+    char out[32];
+    const unsigned char sw[] = { 0x8c, 0x9c, 0xb9 }, ctl[] = { 0x1b, 'a', 0x7f, 0x85, 0x9b, 0x0d, 'b' };
+    size_t k = zt_keys_decode(sw, sizeof sw, cp1250, NULL, out, sizeof out);
+    /* Ś ś ą: kept, decoded from 1250 */
+    OK(k == 6 && !memcmp(out, "\xc5\x9a\xc5\x9b\xc4\x85", 6));
+    /* the same bytes in Latin-1 are C1 controls: left out, after decoding */
+    k = zt_keys_decode(sw, 2, latin1, NULL, out, sizeof out);
+    OK(k == 0);
+    /* ESC, DEL, U+0085, CSI (0x9b), CR: controls; a and b stay */
+    k = zt_keys_decode(ctl, sizeof ctl, latin1, NULL, out, sizeof out);
+    OK(k == 2 && !memcmp(out, "ab", 2));
+    /* a byte the set leaves empty gives nothing, not a guess */
+    { const unsigned char e[] = { 0x81, 'x' }; k = zt_keys_decode(e, 2, cp1250, NULL, out, sizeof out); OK(k == 1 && out[0] == 'x'); }
+    /* never past cap, never half a character */
+    k = zt_keys_decode(sw, sizeof sw, cp1250, NULL, out, 3);
+    OK(k == 2);
+}
+
+static void folding(void)
+{
+    size_t n;
+    char *f;
+    /* Polish: case only */
+    OK(zt_contains_folded(POLISH, strlen(POLISH), "ZA\xc5\xbb\xc3\x93\xc5\x81\xc4\x86", 10) == 1);  /* ZAŻÓŁĆ */
+    /* Greek final sigma, capital and small */
+    OK(zt_contains_folded("\xce\xbb\xcf\x8c\xce\xb3\xce\xbf\xcf\x82", 10, "\xce\x9b\xce\x8c\xce\x93\xce\x9f\xce\xa3", 10) == 1);
+    /* Cyrillic */
+    OK(zt_contains_folded(CYRIL, strlen(CYRIL), "\xd0\xb6\xd0\x98\xd0\x97", 6) == 1);              /* жИЗ */
+    /* ß and SS; the Kelvin sign and k */
+    OK(zt_contains_folded("Stra\xc3\x9f" "e", 7, "STRASSE", 7) == 1);
+    OK(zt_contains_folded("5 \xe2\x84\xaa", 5, "5 k", 3) == 1);
+    /* composed and decomposed é are one letter */
+    OK(zt_contains_folded("caf" E_COMPOSED, 5, "CAF" E_DECOMPOSED, 6) == 1);
+    /* not a match: different letters; and no match inside a character */
+    OK(zt_contains_folded(POLISH, strlen(POLISH), "zazolc", 6) == 0);
+    OK(zt_contains_folded("\xc4\x85", 2, "\x85", 1) <= 0);
+    /* empty needle matches; the hay is not changed */
+    OK(zt_contains_folded(POLISH, strlen(POLISH), "", 0) == 1);
+    f = zt_fold("\xc3\x89T\xc3\x89", 5, &n);
+    OK(f && n == 5 && !memcmp(f, "\xc3\xa9t\xc3\xa9", 5));
+    free(f);
+    OK(!zt_fold("\xff", 1, &n));
+}
+
 int main(int argc, char **argv)
 {
     otag();
     scaling();
     text();
+    keys();
+    folding();
     fonts(argc > 1 ? argv[1] : "tests/fixtures/fonts");
     printf("zk_text: %d checks passed\n", checks);
     return 0;

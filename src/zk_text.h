@@ -127,6 +127,22 @@ size_t zt_hit(zt_font *f, const char *s, size_t n, long x, unsigned flags);
 long zt_draw(zt_font *f, const char *s, size_t n, unsigned flags, unsigned char *cov, int w, int h,
              int stride, long x, long y);
 
+/* The bytes a key gave as UTF-8 text: each byte decoded by dec (from the
+   caller's 8-bit set; 0 when the set has nothing there) and only then
+   sorted, so a printable character of any set is kept whatever byte it
+   has, and control characters (C0, DEL, C1 as code points) are left out.
+   Returns the bytes written to out (at most cap). */
+size_t zt_keys_decode(const unsigned char *b, size_t n, size_t (*dec)(void *u, unsigned char c, char *utf8),
+                      void *u, char *out, size_t cap);
+
+/* A copy of s[0..n) for comparing, not for showing: NFKC with Unicode case
+   folding (ß and ss, Σ and σ and ς, the Kelvin sign and k). malloc'd, *outn
+   bytes and a NUL; NULL when s is not UTF-8 or out of memory. */
+char *zt_fold(const char *s, size_t n, size_t *outn);
+/* Whether needle occurs in hay after both are folded: 1, 0, or -1 out of
+   memory (the caller says so; the texts stay as they are). */
+int zt_contains_folded(const char *hay, size_t hn, const char *needle, size_t nn);
+
 /* s[0..n) in the composed form (NFC) in a new buffer (*outn bytes, NUL
    after them; free() it). NULL when s is not UTF-8 or out of memory. */
 char *zt_compose(const char *s, size_t n, size_t *outn);

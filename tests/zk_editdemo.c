@@ -22,6 +22,7 @@
 #include <proto/iffparse.h>
 #include <clib/alib_protos.h>
 #include "zk_edit.h"
+#include "zk_text_aros.h"
 
 #ifndef MAKE_ID
 #define MAKE_ID(a, b, c, d) ((ULONG)(a) << 24 | (ULONG)(b) << 16 | (ULONG)(c) << 8 | (ULONG)(d))
@@ -142,7 +143,7 @@ int main(int argc, char **argv)
     }
     if (logname) lg = fopen(logname, "w");
     if (!(IFFParseBase = OpenLibrary((CONST_STRPTR)"iffparse.library", 39))) { L("no iffparse"); return 20; }
-    if (!zk_edit_fonts(NULL, why, sizeof why)) { L("FONTS %s", why); CloseLibrary(IFFParseBase); return 20; }
+    if (zk_edit_fonts(NULL, why, sizeof why) != ZT_OK) { L("FONTS %s", why); CloseLibrary(IFFParseBase); return 20; }
     if (!zk_edit_init()) { L("no class"); return 20; }
 
     e1[0].ti_Tag = MUIA_ZkEdit_Lines; e1[0].ti_Data = 8;

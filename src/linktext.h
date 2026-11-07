@@ -70,7 +70,8 @@
    drawn through FreeType (freetype2.library) from the window fonts' own
    TrueType/OpenType files (their .otag in FONTS:), then the fallback faces;
    a character no face has shows as a box and stays in the text. A copy
-   puts FTXT with a UTF8 chunk and a Latin-1 CHRS copy on the clipboard.
+   puts FTXT with a UTF8 chunk and a CHRS copy in the system's set
+   (ENV:CHARSET) on the clipboard.
    Not done: right-to-left text, colour glyphs.
    When neither the window font's file nor any fallback opens, MUIM_Setup
    fails and the window does not open: there is nothing to draw the text
@@ -79,10 +80,14 @@
    HarfBuzz (kerning, marks, ligatures) left to right. */
 #define MUIA_Linktext_UTF8       (MUIB_Linktext | 0x0E)
 /* [I..] STRPTR *: NULL-ended font files tried after the window fonts' own,
-   in order, for characters they lack (default: FONTS:TrueType/OpenSans-
-   Regular.ttf, FONTS:TrueType/VeraSans.ttf, after these). The array and
-   its strings stay the caller's and must live as long as the object. */
+   in order, for characters they lack; the system's faces come after these
+   (zunekit zk_text_aros.h, zt_system_fontset). The array and its strings
+   stay the caller's and must live as long as the object. */
 #define MUIA_Linktext_FallbackFonts (MUIB_Linktext | 0x0F)
+/* [I..] const zt_fontset *: proportional, monospace and fallback faces
+   (zunekit zk_text_aros.h); replaces FallbackFonts. The caller's, living as
+   long as the object. */
+#define MUIA_Linktext_FontSet    (MUIB_Linktext | 0x10)
 /* [ISG] ULONG: colours of the text, of Span_Dim text and of Span_Accent
    text and links, each MUIV_Linktext_RGB(0xrrggbb) or 0 for the pen the
    class takes from the user's settings (text, a half pen, text). The
