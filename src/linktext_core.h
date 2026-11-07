@@ -26,6 +26,7 @@ typedef struct {
 /* What the class gives; mirrors struct MUI_LinktextBlock. */
 typedef struct {
     lt_ulong start, length, flags, indent, rindent, background, padx, pady;
+    lt_ulong align, rule, head;   /* a Table block's columns, rules, header */
 } lt_block_in;
 
 typedef lt_block_in lt_block;
@@ -53,15 +54,25 @@ enum { LT_OK, LT_RANGE, LT_ORDER, LT_TARGET, LT_TOOLARGE, LT_NOMEM };
 #define LT_NOUNDERLINE 8UL
 #define LT_ACCENT      16UL
 #define LT_SHADE       32UL
-#define LT_FONT_FLAGS  (LT_BOLD | LT_FIXED)
-#define LT_SPAN_FLAGS  (LT_BOLD | LT_FIXED | LT_DIM | LT_NOUNDERLINE | LT_ACCENT | LT_SHADE)
+#define LT_LARGE       64UL
+#define LT_FONT_FLAGS  (LT_BOLD | LT_FIXED | LT_LARGE)
+#define LT_SPAN_FLAGS  (LT_BOLD | LT_FIXED | LT_DIM | LT_NOUNDERLINE | LT_ACCENT | LT_SHADE | LT_LARGE)
 /* Block flags, the same numbers as MUIV_Linktext_Block_*. */
 #define LT_BLOCK_RIGHT 1UL
 #define LT_BLOCK_FILL  2UL
 #define LT_BLOCK_PAD   4UL
 #define LT_BLOCK_SPACE 8UL
+#define LT_BLOCK_TABLE 16UL
+#define LT_BLOCK_HEAD  32UL
 #define LT_PAD_MAX     64UL    /* PadX, in eighths of a character */
 #define LT_SPACE_MAX   16UL    /* PadY of a Space block, in eighths of a line */
+/* A Table block: each paragraph a row, its cells separated by TAB. At most
+   LT_TABLE_COLS columns; a TAB past them is a space. align holds two bits
+   a column, column 0 lowest: 0 left, 1 centre, 2 right. */
+#define LT_TABLE_COLS  16
+#define LT_ALIGN_LEFT   0UL
+#define LT_ALIGN_CENTER 1UL
+#define LT_ALIGN_RIGHT  2UL
 
 /* Provided by the build: memory, so that the class needs no C library and
    the tests can fail any allocation. */
@@ -93,6 +104,18 @@ typedef struct {
     long x;          /* pixels from the column's left                 */
     long block;      /* the block it is in, -1 for none               */
     long y, h;       /* pixels from the text's top, height: lt_heights */
+    /* Lines come in the order they are shown, top to bottom. In a table a
+       row's cells are side by side: a cell's lines follow the line of the
+       cell to their left (cont), with the same y. Their bytes are then not
+       in order, so lines are searched by pstart, the start of the line's
+       paragraph (its own start outside tables), which is in order. */
+    lt_ulong pstart;
+    long cell;       /* the column, -1 outside tables                  */
+    long trow;       /* the row in its table, -1 outside tables        */
+    long cx0, cx1;   /* the cell's box, pixels from the column's left  */
+    int cont;        /* beside the line before it, same y              */
+    int large;       /* holds Large text: lt_heights gives it largeh   */
+    long ty;         /* text below the line's top: a table row's room  */
 } lt_line;
 
 /* Wraps to a column `width` pixels wide: *out is a new array of *n lines,
@@ -117,10 +140,17 @@ int lt_layout_keep(const lt_content *c, long width, long avg, lt_measure m, void
    different fonts (LT_BOLD, LT_FIXED); upto when there is none. */
 lt_ulong lt_font_prefix(const lt_content *a, const lt_content *b, lt_ulong upto);
 
-/* Heights and places of laid-out lines: `lineh` each, an empty paragraph
-   `empty` (1..lineh), an empty paragraph of a Space block its PadY eighths
-   of lineh (1..LT_SPACE_MAX). */
-void lt_heights(const lt_content *c, lt_line *l, lt_ulong n, long lineh, long empty);
+/* Heights and places of laid-out lines: `lineh` each, `largeh` for a line
+   with Large text, an empty paragraph `empty` (1..lineh), an empty
+   paragraph of a Space block its PadY eighths of lineh (1..LT_SPACE_MAX).
+   A table row gets PadY eighths of lineh (at most a line) above and below
+   its text; lines beside each other share y and h. */
+void lt_heights(const lt_content *c, lt_line *l, lt_ulong n, long lineh, long largeh, long empty);
+/* Among the lines beside line i (i itself and those after it with cont),
+   the one whose cell holds x; i when none does. */
+lt_ulong lt_line_at_x(const lt_line *l, lt_ulong n, lt_ulong i, long x);
+/* The lines of the block that line i is in: *first..*last. */
+void lt_block_lines(const lt_line *l, lt_ulong n, lt_ulong i, lt_ulong *first, lt_ulong *last);
 /* The first line that can be at the top with the last line still whole in
    `height` pixels. */
 lt_ulong lt_last_top(const lt_line *l, lt_ulong n, long height);
@@ -146,7 +176,8 @@ long lt_block_pady(const lt_block *b, long lineh);
 long lt_width(const lt_content *c, lt_ulong start, lt_ulong n, lt_measure m, void *ctx);
 
 /* The line that holds offset `off` (a line's end belongs to the next line,
-   except for the last one). 0 when there are no lines. */
+   except for the last one; in a table the cell's line that holds it, or
+   the last line of the row before it). 0 when there are no lines. */
 lt_ulong lt_line_of(const lt_line *l, lt_ulong n, lt_ulong off);
 
 /* What is at x pixels from the column's left on a line: *caret the nearest boundary

@@ -22,6 +22,9 @@ struct Linktext_DATA
     ULONG vis;                   /* whole lines at the last show or draw */
     struct TextFont *fixed;      /* between Setup and Cleanup          */
     Object *fixed_obj;           /* what holds `fixed` open            */
+    struct TextFont *large;      /* the big font, NULL: not larger     */
+    Object *large_obj;
+    LONG largeh, large_base;     /* a line with Large text             */
     UWORD dim_pen;               /* MPEN_* for Span_Dim                */
     ULONG empty8;                /* empty paragraph, eighths of a line  */
     ULONG rgb[4];                /* text, dim, accent, shade: MUIV_Linktext_RGB or 0 */

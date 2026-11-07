@@ -88,9 +88,19 @@ lt_content *lt_document_new(const char *text, lt_ulong len, const lt_span_in *in
     p = (char *)(c->links + nl);
     c->text = p;
     c->len = len;
-    for (i = 0; i < len; i++) {
-        unsigned char ch = (unsigned char)text[i];
-        p[i] = (ch < 32 && ch != '\n') || ch == 127 ? ' ' : (char)ch;
+    {
+        /* TAB separates a Table block's cells and is a space anywhere else,
+           and past the last column a table has. */
+        lt_ulong bi = 0, tabs = 0;
+        for (i = 0; i < len; i++) {
+            unsigned char ch = (unsigned char)text[i];
+            int in_table;
+            while (bi < nb && blk[bi].start + blk[bi].length < i) bi++;
+            in_table = bi < nb && blk[bi].start <= i && (blk[bi].flags & LT_BLOCK_TABLE);
+            if (ch == '\n') tabs = 0;
+            if (ch == '\t' && in_table && ++tabs < LT_TABLE_COLS) { p[i] = '\t'; continue; }
+            p[i] = (ch < 32 && ch != '\n') || ch == 127 ? ' ' : (char)ch;
+        }
     }
     p[len] = 0;
     p += len + 1;
@@ -200,6 +210,13 @@ static int push(lt_line **a, lt_ulong *n, lt_ulong *cap, lt_ulong start, lt_ulon
     (*a)[*n].block = block;
     (*a)[*n].y = (long)*n;           /* one unit each until lt_heights */
     (*a)[*n].h = 1;
+    (*a)[*n].pstart = start;
+    (*a)[*n].cell = -1;
+    (*a)[*n].trow = -1;
+    (*a)[*n].cx0 = (*a)[*n].cx1 = 0;
+    (*a)[*n].cont = 0;
+    (*a)[*n].large = 0;
+    (*a)[*n].ty = 0;
     (*n)++;
     return 1;
 }
@@ -230,6 +247,179 @@ void lt_block_area(const lt_block *b, long width, long avg, long *left, long *ar
     *area = w;
 }
 
+/* Lines for bytes pos..e of one paragraph or cell, w pixels wide, at x
+   (with right: each line at its own width, moved later). */
+static int wrap_range(const lt_content *c, lt_ulong pos, lt_ulong e, long w, lt_measure m, void *ctx,
+                      long x, int right, long blk, lt_line **a, lt_ulong *cnt, lt_ulong *cap)
+{
+    const char *t = c->text;
+    lt_ulong i;
+    while (pos < e) {
+        lt_ulong f = fit(c, pos, e - pos, w, m, ctx), brk, shown;
+        if (pos + f >= e) {
+            brk = e;
+        } else if (t[pos + f] == ' ') {
+            brk = pos + f;           /* the word ends exactly at the edge */
+        } else {
+            brk = 0;
+            for (i = pos + f; i > pos; i--)
+                if (t[i - 1] == ' ') { brk = i; break; }
+            if (brk) {
+                /* A word longer than a whole line would leave a gap here
+                   and be cut anyway: start it on this line. */
+                lt_ulong we = brk;
+                while (we < e && t[we] != ' ') we++;
+                if (lt_width(c, brk, we - brk, m, ctx) > w) brk = 0;
+            }
+            if (!brk) {
+                for (i = pos + f; i > pos + f / 2; i--)
+                    if (soft_break(t[i - 1])) { brk = i; break; }
+                if (!brk) brk = pos + f;
+            }
+        }
+        shown = brk - pos;
+        while (shown && t[pos + shown - 1] == ' ') shown--;
+        /* Spaces at the break hang past the edge, on this line. */
+        while (brk < e && t[brk] == ' ') brk++;
+        if (!push(a, cnt, cap, pos, brk - pos, shown,
+                  right ? lt_width(c, pos, shown, m, ctx) : x, blk)) return 0;
+        pos = brk;
+    }
+    return 1;
+}
+
+/* The end of row paragraph [ps, pe)'s cell that starts at cs. */
+static lt_ulong cell_end(const lt_content *c, lt_ulong cs, lt_ulong pe)
+{
+    const char *q = cs < pe ? (const char *)memchr(c->text + cs, '\t', pe - cs) : NULL;
+    return q ? (lt_ulong)(q - c->text) : pe;
+}
+
+/* Cell spacing: PadX eighths of a character at each side of a cell's text,
+   one character without Pad. */
+static long table_padx(const lt_block *b, long avg)
+{
+    if (!(b->flags & LT_BLOCK_PAD)) return avg;
+    return (long)(b->padx > LT_PAD_MAX ? LT_PAD_MAX : b->padx) * avg / 8;
+}
+
+/* The widths of a Table block's columns (text only, without the cells'
+   room) in w[], how many in *nc, for a column `width` wide. A table that
+   fits keeps each column as wide as its widest cell; one that does not
+   gives each column at least its longest word, and what is left in
+   proportion to what each would still need. */
+static void table_cols(const lt_content *c, const lt_block *b, long width, long avg, lt_measure m, void *ctx,
+                       long *w, int *nc)
+{
+    long nat[LT_TABLE_COLS], minw[LT_TABLE_COLS], left, area, pad, avail, sumn = 0, summ = 0;
+    lt_ulong ps = b->start, end = b->start + b->length;
+    int j, n = 1;
+    if (avg < 1) avg = 1;
+    for (j = 0; j < LT_TABLE_COLS; j++) nat[j] = minw[j] = 0;
+    while (ps <= end) {
+        const char *q = ps < end ? (const char *)memchr(c->text + ps, '\n', end - ps) : NULL;
+        lt_ulong pe = q ? (lt_ulong)(q - c->text) : end, cs = ps;
+        for (j = 0; j < LT_TABLE_COLS; j++) {
+            lt_ulong ce = cell_end(c, cs, pe), ws = cs, k;
+            long cw = lt_width(c, cs, ce - cs, m, ctx);
+            if (cw > nat[j]) nat[j] = cw;
+            for (k = cs; k <= ce; k++)
+                if (k == ce || c->text[k] == ' ') {
+                    long ww = lt_width(c, ws, k - ws, m, ctx);
+                    if (ww > minw[j]) minw[j] = ww;
+                    ws = k + 1;
+                }
+            if (j + 1 > n) n = j + 1;
+            if (ce >= pe) break;
+            cs = ce + 1;
+        }
+        if (!q) break;
+        ps = pe + 1;
+    }
+    lt_block_area(b, width, avg, &left, &area);
+    pad = table_padx(b, avg);
+    avail = area - (long)n * 2 * pad;
+    for (j = 0; j < n; j++) {
+        if (nat[j] < avg) nat[j] = avg;
+        if (minw[j] < avg) minw[j] = avg;
+        if (minw[j] > nat[j]) minw[j] = nat[j];
+        sumn += nat[j];
+        summ += minw[j];
+    }
+    if (avail < (long)n * avg) avail = (long)n * avg;
+    for (j = 0; j < n; j++) {
+        if (sumn <= avail) w[j] = nat[j];
+        else if (summ >= avail) w[j] = minw[j] * avail / summ;
+        else w[j] = minw[j] + (avail - summ) * (nat[j] - minw[j]) / (sumn - summ);
+        if (w[j] < avg) w[j] = avg;
+    }
+    *nc = n;
+}
+
+/* A Table block's lines: each row's cells wrapped in their columns, then
+   put in the order they are shown, line by line across the row. */
+static int wrap_table(const lt_content *c, lt_ulong bi, long width, long avg, lt_measure m, void *ctx,
+                      lt_line **ap, lt_ulong *cntp, lt_ulong *capp)
+{
+    const lt_block *b = &c->blocks[bi];
+    long w[LT_TABLE_COLS], cx[LT_TABLE_COLS + 1], left, area, pad;
+    lt_ulong ps = b->start, end = b->start + b->length;
+    int nc, j;
+    long row = 0;
+    table_cols(c, b, width, avg, m, ctx, w, &nc);
+    lt_block_area(b, width, avg, &left, &area);
+    pad = table_padx(b, avg);
+    cx[0] = left;
+    for (j = 0; j < nc; j++) cx[j + 1] = cx[j] + w[j] + 2 * pad;
+    while (ps <= end) {
+        const char *q = ps < end ? (const char *)memchr(c->text + ps, '\n', end - ps) : NULL;
+        lt_ulong pe = q ? (lt_ulong)(q - c->text) : end, cs = ps, first = *cntp, k;
+        lt_ulong at[LT_TABLE_COLS], num[LT_TABLE_COLS], most = 0, v, tot;
+        lt_line *tmp;
+        for (j = 0; j < nc; j++) {
+            lt_ulong ce = cs <= pe ? cell_end(c, cs, pe) : pe, i;
+            unsigned al = (unsigned)(b->align >> (2 * j)) & 3;
+            at[j] = *cntp;
+            if (cs < ce && !wrap_range(c, cs, ce, w[j], m, ctx, cx[j] + pad, 0, (long)bi, ap, cntp, capp)) return 0;
+            if (*cntp == at[j] && !push(ap, cntp, capp, cs < pe ? cs : pe, 0, 0, cx[j] + pad, (long)bi)) return 0;
+            num[j] = *cntp - at[j];
+            if (num[j] > most) most = num[j];
+            for (i = at[j]; i < *cntp; i++) {
+                lt_line *l = &(*ap)[i];
+                long tw = al ? lt_width(c, l->start, l->shown, m, ctx) : 0;
+                if (al == LT_ALIGN_RIGHT) l->x = cx[j] + pad + w[j] - tw;
+                else if (al == LT_ALIGN_CENTER) l->x = cx[j] + pad + (w[j] - tw) / 2;
+                l->cell = j;
+                l->trow = row;
+                l->cx0 = cx[j];
+                l->cx1 = cx[j + 1];
+                l->pstart = ps;
+            }
+            cs = ce < pe ? ce + 1 : pe + 1;
+        }
+        tot = *cntp - first;
+        if (!(tmp = (lt_line *)lt_alloc(sizeof *tmp * tot))) return 0;
+        /* Line v of every cell, left to right; the first of them is the
+           one the others are beside. */
+        for (v = 0, k = 0; v < most; v++) {
+            int lead = 1;
+            for (j = 0; j < nc; j++)
+                if (v < num[j]) {
+                    tmp[k] = (*ap)[at[j] + v];
+                    tmp[k].cont = !lead;
+                    lead = 0;
+                    k++;
+                }
+        }
+        memcpy(*ap + first, tmp, sizeof *tmp * tot);
+        lt_free(tmp);
+        row++;
+        if (!q) break;
+        ps = pe + 1;
+    }
+    return 1;
+}
+
 /* Wraps the paragraphs from `para` (a paragraph's start) to the end onto
    a, which holds *cnt lines already, final. */
 static int wrap_from(const lt_content *c, long width, long avg, lt_measure m, void *ctx, lt_ulong para,
@@ -247,6 +437,14 @@ static int wrap_from(const lt_content *c, long width, long avg, lt_measure m, vo
         int right = 0;
 
         while (bi < c->nblocks && c->blocks[bi].start + c->blocks[bi].length < para) bi++;
+        if (bi < c->nblocks && c->blocks[bi].start == para && (c->blocks[bi].flags & LT_BLOCK_TABLE)) {
+            /* A table is laid out whole, from its first row. */
+            lt_ulong be = c->blocks[bi].start + c->blocks[bi].length;
+            if (!wrap_table(c, bi, width, avg, m, ctx, &a, &cnt, &cap)) goto fail;
+            if (be >= c->len) break;
+            para = be + 1;
+            continue;
+        }
         if (bi < c->nblocks && c->blocks[bi].start <= para) {
             lt_block_area(&c->blocks[bi], width, avg, &x, &w);
             blk = (long)bi;
@@ -257,37 +455,7 @@ static int wrap_from(const lt_content *c, long width, long avg, lt_measure m, vo
         if (pos == e) {
             if (!push(&a, &cnt, &cap, pos, 0, 0, right ? 0 : x, blk)) goto fail;
         }
-        while (pos < e) {
-            lt_ulong f = fit(c, pos, e - pos, w, m, ctx), brk, shown;
-            if (pos + f >= e) {
-                brk = e;
-            } else if (t[pos + f] == ' ') {
-                brk = pos + f;           /* the word ends exactly at the edge */
-            } else {
-                brk = 0;
-                for (i = pos + f; i > pos; i--)
-                    if (t[i - 1] == ' ') { brk = i; break; }
-                if (brk) {
-                    /* A word longer than a whole line would leave a gap here
-                       and be cut anyway: start it on this line. */
-                    lt_ulong we = brk;
-                    while (we < e && t[we] != ' ') we++;
-                    if (lt_width(c, brk, we - brk, m, ctx) > w) brk = 0;
-                }
-                if (!brk) {
-                    for (i = pos + f; i > pos + f / 2; i--)
-                        if (soft_break(t[i - 1])) { brk = i; break; }
-                    if (!brk) brk = pos + f;
-                }
-            }
-            shown = brk - pos;
-            while (shown && t[pos + shown - 1] == ' ') shown--;
-            /* Spaces at the break hang past the edge, on this line. */
-            while (brk < e && t[brk] == ' ') brk++;
-            if (!push(&a, &cnt, &cap, pos, brk - pos, shown,
-                      right ? lt_width(c, pos, shown, m, ctx) : x, blk)) goto fail;
-            pos = brk;
-        }
+        if (!wrap_range(c, pos, e, w, m, ctx, x, right, blk, &a, &cnt, &cap)) goto fail;
         if (!nlp) break;
         para = e + 1;
     }
@@ -296,7 +464,8 @@ static int wrap_from(const lt_content *c, long width, long avg, lt_measure m, vo
         lt_ulong j;
         long wide = 0, left, area, x;
         const lt_block *b;
-        if (a[i].block < 0 || !(c->blocks[a[i].block].flags & LT_BLOCK_RIGHT)) { i++; continue; }
+        if (a[i].block < 0 || !(c->blocks[a[i].block].flags & LT_BLOCK_RIGHT)
+            || (c->blocks[a[i].block].flags & LT_BLOCK_TABLE)) { i++; continue; }
         b = &c->blocks[a[i].block];
         for (j = i; j < cnt && a[j].block == a[i].block; j++)
             if (a[j].x > wide) wide = a[j].x;
@@ -325,7 +494,8 @@ int lt_layout(const lt_content *c, long width, long avg, lt_measure m, void *ctx
 static int same_block(const lt_block *x, const lt_block *y)
 {
     return x->start == y->start && x->length == y->length && x->flags == y->flags && x->indent == y->indent
-        && x->rindent == y->rindent && x->background == y->background && x->padx == y->padx && x->pady == y->pady;
+        && x->rindent == y->rindent && x->background == y->background && x->padx == y->padx && x->pady == y->pady
+        && x->align == y->align && x->rule == y->rule && x->head == y->head;
 }
 
 /* The font flags of the text at off, and in *next the first offset after
@@ -378,7 +548,7 @@ int lt_layout_keep(const lt_content *c, long width, long avg, lt_measure m, void
     }
     if (!p) return lt_layout(c, width, avg, m, ctx, out, n);
     /* Old lines before p are the same lines. */
-    for (k = 0; k < on && ol[k].start < p; k++) ;
+    for (k = 0; k < on && ol[k].pstart < p; k++) ;
     cap = k + 32;
     if (!(a = (lt_line *)lt_alloc(sizeof *a * cap))) return 0;
     memcpy(a, ol, sizeof *a * k);
@@ -410,23 +580,58 @@ int lt_block_box(const lt_content *c, const lt_line *l, lt_ulong nl, lt_ulong b,
     return 1;
 }
 
-void lt_heights(const lt_content *c, lt_line *l, lt_ulong n, long lineh, long empty)
+/* Line i holds Large text. */
+static int has_large(const lt_content *c, const lt_line *l)
 {
-    lt_ulong i;
+    lt_ulong i = span_from(c, l->start), e = l->start + (l->shown ? l->shown : l->len);
+    for (; i < c->nspans && c->spans[i].start < e; i++)
+        if (c->spans[i].flags & LT_LARGE) return 1;
+    return 0;
+}
+
+/* The next line that is not beside another, from i + 1; n when none. */
+static lt_ulong next_lead(const lt_line *l, lt_ulong n, lt_ulong i)
+{
+    for (i++; i < n && l[i].cont; i++) ;
+    return i;
+}
+
+void lt_heights(const lt_content *c, lt_line *l, lt_ulong n, long lineh, long largeh, long empty)
+{
+    lt_ulong i, prev = n;
     long y = 0;
     if (lineh < 1) lineh = 1;
+    if (largeh < lineh) largeh = lineh;
     if (empty < 1 || empty > lineh) empty = lineh;
+    for (i = 0; i < n; i++) l[i].large = l[i].len && c->any_font && has_large(c, &l[i]);
     for (i = 0; i < n; i++) {
-        long h = l[i].len ? lineh : empty;
-        if (!l[i].len && l[i].block >= 0 && (c->blocks[l[i].block].flags & LT_BLOCK_SPACE)) {
+        long h, ty = 0;
+        lt_ulong j;
+        if (l[i].cont && i) continue;
+        h = l[i].len || l[i].cell >= 0 ? lineh : empty;
+        for (j = i; j < n && (j == i || l[j].cont); j++)
+            if (l[j].large) h = largeh;
+        if (!l[i].len && l[i].cell < 0 && l[i].block >= 0 && (c->blocks[l[i].block].flags & LT_BLOCK_SPACE)) {
             lt_ulong e = c->blocks[l[i].block].pady;
             if (e > LT_SPACE_MAX) e = LT_SPACE_MAX;
             h = (long)e * lineh / 8;
             if (h < 1) h = 1;
         }
-        l[i].y = y;
-        l[i].h = h;
+        if (l[i].cell >= 0) {
+            /* A table row's room above its first line and below its last. */
+            const lt_block *b = &c->blocks[l[i].block];
+            lt_ulong nx = next_lead(l, n, i);
+            long pad = (long)(b->pady > 8 ? 8 : b->pady) * lineh / 8;
+            if (prev == n || l[prev].block != l[i].block || l[prev].trow != l[i].trow) { ty = pad; h += pad; }
+            if (nx >= n || l[nx].block != l[i].block || l[nx].trow != l[i].trow) h += pad;
+        }
+        for (j = i; j < n && (j == i || l[j].cont); j++) {
+            l[j].y = y;
+            l[j].h = h;
+            l[j].ty = ty;
+        }
         y += h;
+        prev = i;
     }
 }
 
@@ -436,16 +641,19 @@ lt_ulong lt_last_top(const lt_line *l, lt_ulong n, long height)
     long sum;
     if (!n) return 0;
     k = n - 1;
-    sum = l[k].h;
-    while (k > 0 && sum + l[k - 1].h <= height) sum += l[--k].h;
+    sum = l[k].y + l[k].h;               /* the text's bottom */
+    while (k > 0 && sum - l[k - 1].y <= height) k--;
+    while (k > 0 && l[k].cont) k--;
     return k;
 }
 
 lt_ulong lt_fit_lines(const lt_line *l, lt_ulong n, lt_ulong first, long height)
 {
     lt_ulong k = 0;
-    long sum = 0;
-    while (first + k < n && sum + l[first + k].h <= height) sum += l[first + k++].h;
+    long top;
+    if (first >= n) return 1;
+    top = l[first].y;
+    while (first + k < n && l[first + k].y + l[first + k].h - top <= height) k++;
     return k ? k : 1;
 }
 
@@ -470,13 +678,43 @@ long lt_block_pady(const lt_block *b, long lineh)
 
 lt_ulong lt_line_of(const lt_line *l, lt_ulong n, lt_ulong off)
 {
-    lt_ulong lo = 0, hi = n;
+    lt_ulong lo = 0, hi = n, i, best;
     if (!n) return 0;
     while (hi - lo > 1) {
         lt_ulong mid = lo + (hi - lo) / 2;
-        if (l[mid].start <= off) lo = mid; else hi = mid;
+        if (l[mid].pstart <= off) lo = mid; else hi = mid;
     }
-    return lo;
+    if (l[lo].cell < 0) return lo;
+    /* In a table row: back to its first line, then the line whose bytes
+       hold off, or the last one starting before it. */
+    while (lo > 0 && l[lo - 1].cell >= 0 && l[lo - 1].block == l[lo].block && l[lo - 1].trow == l[lo].trow) lo--;
+    best = lo;
+    for (i = lo; i < n && l[i].cell >= 0 && l[i].block == l[lo].block && l[i].trow == l[lo].trow; i++) {
+        if (l[i].start <= off && off < l[i].start + (l[i].len ? l[i].len : 1)) return i;
+        if (l[i].start <= off && l[i].start >= l[best].start) best = i;
+    }
+    return best;
+}
+
+lt_ulong lt_line_at_x(const lt_line *l, lt_ulong n, lt_ulong i, long x)
+{
+    lt_ulong j;
+    if (i >= n || l[i].cell < 0) return i;
+    for (j = i; j < n && (j == i || l[j].cont); j++)
+        if (x >= l[j].cx0 && x < l[j].cx1) return j;
+    return i;
+}
+
+void lt_block_lines(const lt_line *l, lt_ulong n, lt_ulong i, lt_ulong *first, lt_ulong *last)
+{
+    lt_ulong a = i, b = i;
+    if (i >= n) { *first = *last = i; return; }
+    if (l[i].block >= 0) {
+        while (a > 0 && l[a - 1].block == l[i].block) a--;
+        while (b + 1 < n && l[b + 1].block == l[i].block) b++;
+    }
+    *first = a;
+    *last = b;
 }
 
 long lt_hit(const lt_content *c, const lt_line *line, long x, lt_measure m, void *ctx, lt_ulong *caret)
@@ -553,7 +791,9 @@ int lt_link_fragment(const lt_content *c, const lt_line *l, lt_ulong nl, lt_ulon
     lt_ulong i, a, b;
     if (!s || !nl) return 0;
     i = lt_line_of(l, nl, s->start);
-    for (; i < nl && l[i].start < s->start + s->length; i++) {
+    /* In a table a cell's next line can follow lines of other cells. */
+    for (; i < nl && (l[i].start < s->start + s->length || l[i].cell >= 0); i++) {
+        if (l[i].start >= s->start + s->length) continue;
         lt_ulong le = l[i].start + l[i].shown;
         a = s->start > l[i].start ? s->start : l[i].start;
         b = s->start + s->length < le ? s->start + s->length : le;

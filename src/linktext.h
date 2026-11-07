@@ -146,6 +146,10 @@ struct MUIP_Linktext_SetDocument
 #define MUIV_Linktext_Span_NoUnderline 8  /* a link drawn without its line    */
 #define MUIV_Linktext_Span_Accent     16  /* in the accent colour              */
 #define MUIV_Linktext_Span_Shade      32  /* on a box in the shade colour: code */
+#define MUIV_Linktext_Span_Large      64  /* the user's big font, for headings: a
+                                             line with it is that much higher;
+                                             the normal font when Big is not
+                                             larger */
 
 struct MUI_LinktextSpan
 {
@@ -183,6 +187,25 @@ struct MUI_LinktextSpan
 #define MUIV_Linktext_Block_Fill  2   /* a box in Background behind it  */
 #define MUIV_Linktext_Block_Pad   4   /* the box's room is PadX and PadY */
 #define MUIV_Linktext_Block_Space 8   /* its empty paragraphs PadY/8 lines high */
+#define MUIV_Linktext_Block_Table 16  /* a table: see below                */
+#define MUIV_Linktext_Block_Head  32  /* a table's first row is its header */
+
+/* A Table block lays its paragraphs out as rows, their cells separated by
+   TAB, in columns (at most 16; a TAB past them is a space): a column is as
+   wide as its widest cell when the table fits the block's area, and gets
+   at least its longest word and a share of the rest when it does not; a
+   cell's text wraps inside its column. PadX (with Pad) is the room at each
+   side of a cell's text, a character without Pad; PadY the room above and
+   below each row, in eighths of a line (at most 8). Align holds two bits a
+   column, column 0 lowest: MUIV_Linktext_Align_*. The class draws the
+   table: Background behind it (with Fill), Head behind the header row
+   (with Head; 0 is the shade colour), and Rule for the lines between rows
+   and columns and around it (0 is MPEN_HALFSHADOW); colours as Background.
+   The text between cells is not shown; copying a selection keeps the TABs
+   and newlines, so it pastes as rows of tab-separated cells. */
+#define MUIV_Linktext_Align_Left   0
+#define MUIV_Linktext_Align_Center 1
+#define MUIV_Linktext_Align_Right  2
 
 struct MUI_LinktextBlock
 {
@@ -194,6 +217,8 @@ struct MUI_LinktextBlock
     ULONG Background;     /* with Fill: MPEN_* + 1, or MUIV_Linktext_RGB();
                              0 is MPEN_HALFSHINE                           */
     ULONG PadX, PadY;     /* with Pad: eighths of a character, of a line   */
+    ULONG Align;          /* a Table's columns: two bits each              */
+    ULONG Rule, Head;     /* a Table's lines and header: as Background     */
 };
 
 #define MUIV_Linktext_Action_Open 1  /* click, Return, menu                  */

@@ -292,6 +292,7 @@ static lt_content *mkdoc(const char *t, const lt_span_in *s, lt_ulong n, const l
 {
     int st = -1;
     lt_content *c = lt_document_new(t, (lt_ulong)-1, s, n, b, nb, &st);
+    if (!c) printf("mkdoc status %d for [%s]\n", st, t);
     OK(c && st == LT_OK);
     return c;
 }
@@ -443,7 +444,7 @@ static void fixed_widths(void)
     memset(one, 0, sizeof one);
     s[0].start = 0; s[0].length = 3; s[0].flags = LT_FIXED;
     s[1].start = 4; s[1].length = 2; s[1].flags = LT_FIXED | LT_BOLD;
-    s[2].start = 7; s[2].length = 4; s[2].flags = LT_DIM | LT_NOUNDERLINE | 0x40; s[2].target = "https://t";
+    s[2].start = 7; s[2].length = 4; s[2].flags = LT_DIM | LT_NOUNDERLINE | 0x80; s[2].target = "https://t";
     c = mk("abc de link x", s, 3);
     OK(lt_width(c, 0, 13, font, NULL) == 30 + 8 + 22 + 8 + 32 + 16);
     OK(lt_width(c, 1, 4, font, NULL) == 20 + 8 + 11);
@@ -559,7 +560,7 @@ static void heights_and_padding(void)
     c = mkdoc("ab\n\ncd\n\nef", NULL, 0, NULL, 0);
     OK(lt_layout(c, 80, 8, font, NULL, &l, &n) && n == 5);
     OK(l[3].y == 3 && l[3].h == 1);                  /* units until lt_heights */
-    lt_heights(c, l, n, 16, 6);
+    lt_heights(c, l, n, 16, 16, 6);
     OK(l[0].y == 0 && l[0].h == 16 && l[1].y == 16 && l[1].h == 6);
     OK(l[2].y == 22 && l[3].h == 6 && l[4].y == 44 && l[4].h == 16);
     /* What fits: from line 0 in 40 pixels, 16+6+16 = 38, three lines. */
@@ -573,9 +574,9 @@ static void heights_and_padding(void)
     OK(lt_line_at_y(l, n, 1, 0) == 1 && lt_line_at_y(l, n, 1, 5) == 1 && lt_line_at_y(l, n, 1, 6) == 2);
     OK(lt_line_at_y(l, n, 1, 1000) == n);
     /* out of range values are a whole line */
-    lt_heights(c, l, n, 16, 0);
+    lt_heights(c, l, n, 16, 16, 0);
     OK(l[1].h == 16);
-    lt_heights(c, l, n, 16, 40);
+    lt_heights(c, l, n, 16, 16, 40);
     OK(l[1].h == 16);
     lt_free(l);
     lt_content_unref(c);
@@ -586,16 +587,16 @@ static void heights_and_padding(void)
     b[0].pady = 2;
     c = mkdoc("ab\n\ncd\n\nef", NULL, 0, b, 1);
     OK(lt_layout(c, 80, 8, font, NULL, &l, &n) && n == 5 && l[1].block == 0 && l[3].block < 0);
-    lt_heights(c, l, n, 16, 6);
+    lt_heights(c, l, n, 16, 16, 6);
     OK(l[1].h == 4 && l[3].h == 6 && l[2].y == 20 && l[4].y == 42);
     c->blocks[0].pady = 12;
-    lt_heights(c, l, n, 16, 6);
+    lt_heights(c, l, n, 16, 16, 6);
     OK(l[1].h == 24);
     c->blocks[0].pady = 99;
-    lt_heights(c, l, n, 16, 6);
+    lt_heights(c, l, n, 16, 16, 6);
     OK(l[1].h == 32);
     c->blocks[0].pady = 0;
-    lt_heights(c, l, n, 16, 6);
+    lt_heights(c, l, n, 16, 16, 6);
     OK(l[1].h == 1);
     lt_free(l);
     lt_content_unref(c);
@@ -640,13 +641,15 @@ static int same_lines(const lt_line *a, lt_ulong na, const lt_line *b, lt_ulong 
     if (na != nb) return 0;
     for (i = 0; i < na; i++)
         if (a[i].start != b[i].start || a[i].len != b[i].len || a[i].shown != b[i].shown
-            || a[i].x != b[i].x || a[i].block != b[i].block) return 0;
+            || a[i].x != b[i].x || a[i].block != b[i].block || a[i].pstart != b[i].pstart
+            || a[i].cell != b[i].cell || a[i].trow != b[i].trow || a[i].cont != b[i].cont
+            || a[i].cx0 != b[i].cx0 || a[i].cx1 != b[i].cx1) return 0;
     return 1;
 }
 
 static void keep_layout(void)
 {
-    static const char *words[] = { "a", "bb", "ccc", "dddd word", "x", "\n", "\n\n", "longerword", " " };
+    static const char *words[] = { "a", "bb", "ccc", "dddd word", "x", "\n", "\n\n", "longerword", "\t" };
     unsigned seed = 7;
     int round;
     for (round = 0; round < 400; round++) {
@@ -689,7 +692,9 @@ static void keep_layout(void)
                         lt_block_in *x = &bb[k][(*nn[k])++];
                         memset(x, 0, sizeof *x);
                         x->start = s; x->length = e - s;
-                        x->flags = (para % 4 == 1 ? LT_BLOCK_RIGHT : 0) | LT_BLOCK_FILL;
+                        x->flags = para % 6 == 3 ? LT_BLOCK_TABLE | LT_BLOCK_HEAD
+                                 : (para % 4 == 1 ? LT_BLOCK_RIGHT : 0) | LT_BLOCK_FILL;
+                        x->align = (lt_ulong)para * 6;
                         x->indent = 2; x->rindent = 1;
                     }
                     para++;
@@ -816,6 +821,145 @@ static void keep_layout(void)
     OK(live == 0);
 }
 
+/* Tables: rows are paragraphs, cells are separated by TAB; lines come
+   across the row, the cells' first lines side by side. */
+static void tables(void)
+{
+    lt_block_in b[2];
+    lt_line *l = NULL;
+    lt_ulong n = 0, i;
+    lt_content *c;
+    const char *t;
+
+    /* "a | bb" over "1 | 22", no Pad: a character (8 px) of room at each
+       side of a cell. Column 0 is 8 wide, column 1 16. */
+    t = "a\tbb\n1\t22";
+    b[0] = blk(0, (lt_ulong)strlen(t), LT_BLOCK_TABLE | LT_BLOCK_HEAD, 0, 0);
+    c = mkdoc(t, NULL, 0, b, 1);
+    OK(c->text[1] == '\t');                          /* kept inside a table */
+    OK(lt_layout(c, 400, 8, font, NULL, &l, &n) && n == 4);
+    OK(l[0].start == 0 && l[0].cell == 0 && l[0].trow == 0 && !l[0].cont && l[0].x == 8);
+    OK(l[1].start == 2 && l[1].cell == 1 && l[1].trow == 0 && l[1].cont && l[1].x == 24 + 8);
+    OK(l[0].cx0 == 0 && l[0].cx1 == 24 && l[1].cx0 == 24 && l[1].cx1 == 56);
+    OK(l[2].start == 5 && l[2].trow == 1 && !l[2].cont && l[2].pstart == 5 && l[3].cont && l[3].pstart == 5);
+    OK(l[0].block == 0 && l[3].block == 0);
+    /* heights: lines across share y; PadY 0 gives no room */
+    lt_heights(c, l, n, 16, 16, 6);
+    OK(l[0].y == 0 && l[1].y == 0 && l[2].y == 16 && l[3].y == 16 && l[3].h == 16);
+    OK(lt_fit_lines(l, n, 0, 16) == 2 && lt_fit_lines(l, n, 0, 32) == 4);
+    OK(lt_last_top(l, n, 16) == 2 && lt_last_top(l, n, 1000) == 0);
+    OK(lt_line_at_y(l, n, 0, 20) == 2);
+    OK(lt_line_at_x(l, n, 2, 30) == 3 && lt_line_at_x(l, n, 2, 3) == 2 && lt_line_at_x(l, n, 2, 999) == 2);
+    /* searching by offset: the cell's own line, also across rows */
+    OK(lt_line_of(l, n, 0) == 0 && lt_line_of(l, n, 3) == 1 && lt_line_of(l, n, 7) == 3 && lt_line_of(l, n, 5) == 2);
+    {
+        lt_ulong f0, f1;
+        lt_block_lines(l, n, 2, &f0, &f1);
+        OK(f0 == 0 && f1 == 3);
+    }
+    lt_free(l);
+    lt_content_unref(c);
+
+    /* A table between paragraphs, PadY 2 of a 16-pixel line: 4 pixels of
+       room above and below each row. */
+    t = "top\nh1\th2\nx\ty\nend";
+    b[0] = blk(4, 9, LT_BLOCK_TABLE | LT_BLOCK_HEAD, 0, 0);
+    b[0].pady = 2;
+    c = mkdoc(t, NULL, 0, b, 1);
+    OK(lt_layout(c, 400, 8, font, NULL, &l, &n) && n == 6);
+    lt_heights(c, l, n, 16, 16, 6);
+    OK(l[0].cell < 0 && l[1].cell == 0 && l[1].ty == 4 && l[1].h == 24 && l[2].y == l[1].y && l[2].ty == 4);
+    OK(l[3].y == 16 + 24 && l[5].y == 16 + 48 && l[5].cell < 0 && l[5].ty == 0);
+    OK(lt_line_of(l, n, 15) == 5);
+    lt_free(l);
+    lt_content_unref(c);
+
+    /* A long cell in a narrow column wraps; the short one keeps its word.
+       The longer cell's second line follows the row's first line across,
+       on its own. */
+    t = "h\tthe long cell of words";
+    b[0] = blk(0, (lt_ulong)strlen(t), LT_BLOCK_TABLE, 0, 0);
+    c = mkdoc(t, NULL, 0, b, 1);
+    OK(lt_layout(c, 120, 8, font, NULL, &l, &n));
+    OK(n >= 3 && l[0].cell == 0 && l[1].cell == 1 && l[1].cont && l[2].cell == 1 && !l[2].cont);
+    for (i = 1; i < n; i++) OK(l[i].x + (long)l[i].shown * 8 <= 120 && l[i].cx1 <= 120);
+    lt_heights(c, l, n, 16, 16, 6);
+    OK(l[2].y == 16 && l[n - 1].y + l[n - 1].h == (long)(n - 1) * 16);
+    lt_free(l);
+    lt_content_unref(c);
+
+    /* Alignment: column 1 at the right, column 2 centred. Missing cells
+       and an empty row get an empty line each, so every row has one line
+       a column. */
+    t = "aaaa\tbbbb\tcccc\nx\ty\tz\nq\n";
+    b[0] = blk(0, (lt_ulong)strlen(t) - 1, LT_BLOCK_TABLE, 0, 0);
+    b[0].align = (LT_ALIGN_RIGHT << 2) | (LT_ALIGN_CENTER << 4);
+    c = mkdoc(t, NULL, 0, b, 1);
+    OK(lt_layout(c, 400, 8, font, NULL, &l, &n));
+    /* columns 32 wide with 8 room: cells at 8, 56, 104 */
+    OK(l[3].cell == 0 && l[3].x == 8 && l[4].cell == 1 && l[4].x == 48 + 8 + 32 - 8);
+    OK(l[5].cell == 2 && l[5].x == 96 + 8 + (32 - 8) / 2);
+    OK(l[6].trow == 2 && l[7].trow == 2 && l[7].len == 0 && l[8].len == 0 && l[8].cell == 2);
+    OK(l[9].cell < 0 && l[9].len == 0);            /* the empty paragraph after it */
+    lt_free(l);
+    lt_content_unref(c);
+
+    /* Too narrow for the words: columns share the width by their longest
+       words, at least a character each. */
+    t = "abcdefghij\tklmnopqrstuvwxyz";
+    b[0] = blk(0, (lt_ulong)strlen(t), LT_BLOCK_TABLE, 0, 0);
+    c = mkdoc(t, NULL, 0, b, 1);
+    OK(lt_layout(c, 100, 8, font, NULL, &l, &n));
+    for (i = 0; i < n; i++) OK(l[i].cx1 <= 100 + 8 && l[i].x >= l[i].cx0);
+    lt_free(l);
+    lt_content_unref(c);
+
+    /* A TAB past the last column is a space; a TAB outside a table too. */
+    {
+        char many[64] = "";
+        int k;
+        for (k = 0; k < LT_TABLE_COLS + 2; k++) strcat(many, "a\t");
+        b[0] = blk(0, (lt_ulong)strlen(many), LT_BLOCK_TABLE, 0, 0);
+        c = mkdoc(many, NULL, 0, b, 1);
+        OK(c->text[2 * (LT_TABLE_COLS - 1) - 1] == '\t' && c->text[2 * LT_TABLE_COLS - 1] == ' ');
+        OK(lt_layout(c, 2000, 8, font, NULL, &l, &n));
+        for (i = 0; i < n; i++) OK(l[i].cell < LT_TABLE_COLS);
+        lt_free(l);
+        lt_content_unref(c);
+        c = mkdoc("a\tb", NULL, 0, NULL, 0);
+        OK(c->text[1] == ' ');
+        lt_content_unref(c);
+    }
+
+    /* A link in a cell over two lines: both fragments found, across the
+       other cell's line between them. */
+    {
+        lt_span_in sp[1] = { { 2, 21, 0, "https://e", 1 } };
+        lt_ulong line, f;
+        long x0, x1;
+        t = "h\twrapped link text here";
+        b[0] = blk(0, (lt_ulong)strlen(t), LT_BLOCK_TABLE, 0, 0);
+        c = mkdoc(t, sp, 1, b, 1);
+        OK(lt_layout(c, 140, 8, font, NULL, &l, &n));
+        for (f = 0; lt_link_fragment(c, l, n, 0, f, font, NULL, &line, &x0, &x1); f++) OK(l[line].cell == 1);
+        OK(f >= 2);
+        lt_free(l);
+        lt_content_unref(c);
+    }
+
+    /* Large text: its line gets largeh. */
+    {
+        lt_span_in sp[1] = { { 0, 5, LT_LARGE | LT_BOLD, NULL, 0 } };
+        c = mkdoc("Title\nbody", sp, 1, NULL, 0);
+        OK(lt_layout(c, 400, 8, font, NULL, &l, &n) && n == 2);
+        lt_heights(c, l, n, 16, 22, 6);
+        OK(l[0].large && l[0].h == 22 && !l[1].large && l[1].y == 22 && l[1].h == 16);
+        lt_free(l);
+        lt_content_unref(c);
+    }
+    OK(live == 0);
+}
+
 int main(void)
 {
     validation();
@@ -835,6 +979,7 @@ int main(void)
     kept_across_changes();
     heights_and_padding();
     keep_layout();
+    tables();
     printf("linktext core: %d checks passed\n", checks);
     return 0;
 }
