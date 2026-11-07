@@ -36,12 +36,7 @@
 #include "linktext_core.h"
 #include "linktext_private.h"
 #include "zk_text.h"
-#include <proto/dos.h>
-#define __CYBERGRAPHICS_NOLIBBASE__
-#define __CYBERGRAPHICS_LIBBASE lt_cgx_base
-static struct Library *lt_cgx_base;   /* opened at the first UTF-8 draw */
-#include <proto/cybergraphics.h>
-#include <cybergraphx/cybergraphics.h>
+#include "zk_text_aros.h"
 
 #ifndef MAKE_ID
 #define MAKE_ID(a, b, c, d) ((ULONG)(a) << 24 | (ULONG)(b) << 16 | (ULONG)(c) << 8 | (ULONG)(d))
@@ -294,9 +289,9 @@ static void draw_utf8(struct Linktext_DATA *d, Object *obj, struct RastPort *rp,
                       LONG y, LONG base, LONG th, const char *s, ULONG n, lt_ulong fl)
 {
     struct zt_font *z = zfont(d, fl);
-    LONG rw, bw, bh = th, i, j, c0, c1;
+    LONG rw, bw, bh = th, c0, c1;
     UBYTE *cov;
-    ULONG pen = GetAPen(rp), rgb[3];
+    ULONG pen = GetAPen(rp);
     unsigned zf = (fl & LT_BOLD) ? ZT_BOLD : 0;
     struct ColorMap *cm = _screen(obj) ? _screen(obj)->ViewPort.ColorMap : NULL;
     if (!z || !cm || xb <= xa || bh <= 0) return;
@@ -310,31 +305,7 @@ static void draw_utf8(struct Linktext_DATA *d, Object *obj, struct RastPort *rp,
     if (c1 >= rw) c1 = bw;
     if (c0 < 0) c0 = 0;
     if (c1 > bw) c1 = bw;
-    GetRGB32(cm, pen, 1, rgb);
-    if (!lt_cgx_base) lt_cgx_base = OpenLibrary((CONST_STRPTR)"cybergraphics.library", 0);
-    if (c1 > c0 && lt_cgx_base && GetBitMapAttr(rp->BitMap, BMA_DEPTH) > 8) {
-        LONG pw = c1 - c0;
-        UBYTE *px = (UBYTE *)AllocVec((ULONG)(pw * bh * 3), MEMF_ANY);
-        if (px) {
-            ULONG pr = rgb[0] >> 24, pg = rgb[1] >> 24, pb = rgb[2] >> 24;
-            ReadPixelArray(px, 0, 0, pw * 3, rp, rx + c0, y, pw, bh, RECTFMT_RGB);
-            for (j = 0; j < bh; j++)
-                for (i = 0; i < pw; i++) {
-                    ULONG a = cov[j * bw + c0 + i];
-                    UBYTE *p = px + (j * pw + i) * 3;
-                    if (!a) continue;
-                    p[0] = (UBYTE)((p[0] * (255 - a) + pr * a) / 255);
-                    p[1] = (UBYTE)((p[1] * (255 - a) + pg * a) / 255);
-                    p[2] = (UBYTE)((p[2] * (255 - a) + pb * a) / 255);
-                }
-            WritePixelArray(px, 0, 0, pw * 3, rp, rx + c0, y, pw, bh, RECTFMT_RGB);
-            FreeVec(px);
-        }
-    } else if (c1 > c0) {
-        for (j = 0; j < bh; j++)
-            for (i = c0; i < c1; i++)
-                if (cov[j * bw + i] >= 128) WritePixel(rp, rx + i, y + j);
-    }
+    zt_blit(rp, cm, pen, cov, bw, bh, c0, c1, rx, y);
     if ((fl & LT_RUN_LINK) && !(fl & LT_NOUNDERLINE)) {
         Move(rp, xa, base + 1);
         Draw(rp, xb - 1, base + 1);
@@ -1424,82 +1395,19 @@ static UWORD dim_pen(Object *obj)
     return MPEN_HALFSHADOW;
 }
 
-/* The outline file of an AROS font: its .otag in FONTS: (or where the
-   name says) names it. 0 when there is none (a bitmap font). */
-static int font_file(struct TextFont *tf, char *out, size_t outn)
-{
-    char otag[300];
-    const char *name = tf && tf->tf_Message.mn_Node.ln_Name ? (const char *)tf->tf_Message.mn_Node.ln_Name : NULL;
-    unsigned char *buf;
-    size_t len;
-    BPTR fh;
-    LONG got;
-    int ok = 0;
-    if (!name || !*name) return 0;
-    len = strlen(name);
-    if (len > 5 && !strcmp(name + len - 5, ".font")) len -= 5;
-    if (len + 12 > sizeof otag) return 0;
-    if (strchr(name, ':')) otag[0] = 0;
-    else strcpy(otag, "FONTS:");
-    strncat(otag, name, len);
-    strcat(otag, ".otag");
-    if (!(fh = Open((CONST_STRPTR)otag, MODE_OLDFILE))) return 0;
-    if ((buf = (unsigned char *)AllocVec(8192, MEMF_ANY))) {
-        got = Read(fh, buf, 8192);
-        if (got > 0) ok = zt_otag_file(buf, (size_t)got, out, outn);
-        FreeVec(buf);
-    }
-    Close(fh);
-    return ok;
-}
-
-static const char *const default_fallbacks[] = {
-    "FONTS:TrueType/OpenSans-Regular.ttf", "FONTS:TrueType/VeraSans.ttf", NULL
-};
-
 int linktext_utf8_fonts(CONST_STRPTR const *fallbacks, char *why, ULONG whylen)
 {
-    const char *paths[ZT_MAX_FACES];
-    int n = 0, i;
-    struct zt_font *z;
-    for (i = 0; fallbacks && fallbacks[i] && n < ZT_MAX_FACES; i++) paths[n++] = (const char *)fallbacks[i];
-    for (i = 0; default_fallbacks[i] && n < ZT_MAX_FACES; i++) paths[n++] = default_fallbacks[i];
-    if (!(z = zt_font_open(paths, n, 13))) {
-        if (why && whylen) {
-            const char *m = "no outline font for UTF-8 text: none of the fallback fonts opened "
-                            "(FONTS:TrueType/OpenSans-Regular.ttf, FONTS:TrueType/VeraSans.ttf), "
-                            "or freetype2.library is missing";
-            ULONG k = 0;
-            while (m[k] && k + 1 < whylen) { why[k] = m[k]; k++; }
-            why[k] = 0;
-        }
-        return 0;
-    }
-    zt_font_close(z);
-    if (why && whylen) why[0] = 0;
-    return 1;
-}
-
-/* The face sets: the font's own file, then the application's fallbacks,
-   then the defaults; Large is the normal set a quarter larger. */
-static struct zt_font *open_set(struct Linktext_DATA *d, struct TextFont *tf, int px)
-{
-    const char *paths[ZT_MAX_FACES];
-    char own[256];
-    int n = 0, i;
-    if (font_file(tf, own, sizeof own)) paths[n++] = own;
-    for (i = 0; d->fallbacks && d->fallbacks[i] && n < ZT_MAX_FACES; i++) paths[n++] = (const char *)d->fallbacks[i];
-    for (i = 0; default_fallbacks[i] && n < ZT_MAX_FACES; i++) paths[n++] = default_fallbacks[i];
-    return n ? zt_font_open(paths, n, px) : NULL;
+    return zt_fonts_usable(fallbacks, why, whylen);
 }
 
 static void utf8_fonts_setup(struct Linktext_DATA *d, Object *obj)
 {
     struct TextFont *f = _font(obj);
     int px = f ? f->tf_YSize : 13;
-    d->zf[0] = open_set(d, f, px);
-    d->zf[1] = d->fixed ? open_set(d, d->fixed, d->fixed->tf_YSize) : NULL;
-    d->zf[2] = open_set(d, f, px + (px / 4 > 3 ? px / 4 : 3));
+    d->zf[0] = zt_open_for(f, px, d->fallbacks, 0);
+    /* code: the user's fixed font's own file, else the system's monospace */
+    d->zf[1] = zt_open_for(d->fixed, d->fixed ? d->fixed->tf_YSize : px, d->fallbacks, 1);
+    d->zf[2] = zt_open_for(f, px + (px / 4 > 3 ? px / 4 : 3), d->fallbacks, 0);
 }
 
 static void utf8_fonts_cleanup(struct Linktext_DATA *d)
