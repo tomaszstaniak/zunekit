@@ -22,6 +22,9 @@ $CC $F -o "$B/zk-core-test" "$R/tests/host/zk_core_test.c" "$R/src/zk_imageview_
   "$R/src/zk_dragout_core.c"
 $CC $F $ZT -o "$B/lt-test" "$R/tests/host/linktext_core_test.c" "$R/src/linktext_core.c" $ZT_SRC $FT $CXXLIB
 $CC $F $ZT -o "$B/zt-test" "$R/tests/host/zk_text_test.c" $ZT_SRC $FT $CXXLIB
+$CC $F $ZT -Dmalloc=fm -Drealloc=fr -Dcalloc=fc -c "$R/src/zk_edit_core.c" -o "$B/zk_edit_core.o"
+$CC $F $ZT -o "$B/ze-test" "$R/tests/host/zk_edit_test.c" "$B/zk_edit_core.o" $ZT_SRC $FT $CXXLIB
 "$B/zk-core-test"
 "$B/lt-test"
 "$B/zt-test" "$R/tests/fixtures/fonts"
+"$B/ze-test" "$R/tests/fixtures/fonts"
