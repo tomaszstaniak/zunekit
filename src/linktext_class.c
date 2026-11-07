@@ -35,6 +35,13 @@
 #endif
 #include "linktext_core.h"
 #include "linktext_private.h"
+#include "zk_text.h"
+#include <proto/dos.h>
+#define __CYBERGRAPHICS_NOLIBBASE__
+#define __CYBERGRAPHICS_LIBBASE lt_cgx_base
+static struct Library *lt_cgx_base;   /* opened at the first UTF-8 draw */
+#include <proto/cybergraphics.h>
+#include <cybergraphx/cybergraphics.h>
 
 #ifndef MAKE_ID
 #define MAKE_ID(a, b, c, d) ((ULONG)(a) << 24 | (ULONG)(b) << 16 | (ULONG)(c) << 8 | (ULONG)(d))
@@ -68,7 +75,15 @@ struct lt_rp
 {
     struct RastPort *rp;
     struct TextFont *normal, *fixed, *large;
+    struct Linktext_DATA *d;
 };
+
+/* UTF-8: the face set for a run's flags. */
+static struct zt_font *zfont(struct Linktext_DATA *d, lt_ulong flags)
+{
+    struct zt_font *z = flags & LT_FIXED ? d->zf[1] : flags & LT_LARGE ? d->zf[2] : d->zf[0];
+    return z ? z : d->zf[0];
+}
 
 static void use_font(struct lt_rp *r, lt_ulong flags)
 {
@@ -81,6 +96,12 @@ static long measure(void *ctx, const char *s, lt_ulong n, lt_ulong flags)
     struct lt_rp *r = (struct lt_rp *)ctx;
     struct RastPort *rp = r->rp;
     long w;
+    if (r->d && r->d->utf8) {
+        struct zt_font *z = zfont(r->d, flags);
+        if (!z) return 0;
+        /* bold is drawn twice a pixel apart: a pixel wider a cluster */
+        return zt_measure(z, s, n) + ((flags & LT_BOLD) ? (long)zt_clusters(s, n) : 0);
+    }
     use_font(r, flags);
     if (flags & LT_BOLD) {
         ULONG old = SetSoftStyle(rp, FSF_BOLD, AskSoftStyle(rp));
@@ -98,13 +119,16 @@ static long measure(void *ctx, const char *s, lt_ulong n, lt_ulong flags)
 static struct RastPort *ready(struct Linktext_DATA *d, Object *obj, struct lt_rp *r)
 {
     r->rp = _rp(obj);
+    r->d = d;
     r->normal = _font(obj);
     r->fixed = d->fixed ? d->fixed : r->normal;
     r->large = d->large ? d->large : r->normal;
     if (!r->rp) return NULL;
     SetFont(r->rp, r->normal);
     if (!d->avg) {
-        d->avg = TextLength(r->rp, (STRPTR)AVG_SAMPLE, sizeof AVG_SAMPLE - 1) / (LONG)(sizeof AVG_SAMPLE - 1);
+        d->avg = (d->utf8 && d->zf[0] ? zt_measure(d->zf[0], AVG_SAMPLE, sizeof AVG_SAMPLE - 1)
+                                      : TextLength(r->rp, (STRPTR)AVG_SAMPLE, sizeof AVG_SAMPLE - 1))
+                 / (LONG)(sizeof AVG_SAMPLE - 1);
         if (d->avg < 1) d->avg = 1;
     }
     return r->rp;
@@ -252,6 +276,53 @@ static int layout(struct Linktext_DATA *d, Object *obj)
 
 /* ------------------------------------------------------------------- draw */
 
+/* UTF-8: one run of text in the RastPort's current pen, over what is
+   already drawn there: coverage from zk_text blended into the pixels read
+   back (true colour), or the pixels at half coverage and more set in the
+   pen (screens of 256 colours and less). x, y: the run's box; base: the
+   baseline; w, th: its width and the line's text height. */
+static void draw_utf8(struct Linktext_DATA *d, Object *obj, struct RastPort *rp, LONG x, LONG y, LONG base,
+                      LONG w, LONG th, const char *s, ULONG n, lt_ulong fl)
+{
+    struct zt_font *z = zfont(d, fl);
+    LONG bw = w + 2, bh = th, i, j;
+    UBYTE *cov;
+    ULONG pen = GetAPen(rp), rgb[3];
+    struct ColorMap *cm = _screen(obj) ? _screen(obj)->ViewPort.ColorMap : NULL;
+    if (!z || bw <= 0 || bh <= 0 || !cm) return;
+    if (!(cov = (UBYTE *)AllocVec((ULONG)(bw * bh), MEMF_ANY | MEMF_CLEAR))) return;
+    zt_draw(z, s, n, cov, bw, bh, bw, 0, base - y);
+    if (fl & LT_BOLD) zt_draw(z, s, n, cov, bw, bh, bw, 1, base - y);
+    GetRGB32(cm, pen, 1, rgb);
+    if (!lt_cgx_base) lt_cgx_base = OpenLibrary((CONST_STRPTR)"cybergraphics.library", 0);
+    if (lt_cgx_base && GetBitMapAttr(rp->BitMap, BMA_DEPTH) > 8) {
+        UBYTE *px = (UBYTE *)AllocVec((ULONG)(bw * bh * 3), MEMF_ANY);
+        if (px) {
+            ULONG pr = rgb[0] >> 24, pg = rgb[1] >> 24, pb = rgb[2] >> 24;
+            ReadPixelArray(px, 0, 0, bw * 3, rp, x, y, bw, bh, RECTFMT_RGB);
+            for (i = 0; i < bw * bh; i++) {
+                ULONG a = cov[i];
+                UBYTE *p = px + i * 3;
+                if (!a) continue;
+                p[0] = (UBYTE)((p[0] * (255 - a) + pr * a) / 255);
+                p[1] = (UBYTE)((p[1] * (255 - a) + pg * a) / 255);
+                p[2] = (UBYTE)((p[2] * (255 - a) + pb * a) / 255);
+            }
+            WritePixelArray(px, 0, 0, bw * 3, rp, x, y, bw, bh, RECTFMT_RGB);
+            FreeVec(px);
+        }
+    } else {
+        for (j = 0; j < bh; j++)
+            for (i = 0; i < bw; i++)
+                if (cov[j * bw + i] >= 128) WritePixel(rp, x + i, y + j);
+    }
+    if ((fl & LT_RUN_LINK) && !(fl & LT_NOUNDERLINE)) {
+        Move(rp, x, base + 1);
+        Draw(rp, x + w - 1, base + 1);
+    }
+    FreeVec(cov);
+}
+
 static void draw_line(struct Linktext_DATA *d, Object *obj, struct lt_rp *r, ULONG i, LONG y)
 {
     struct RastPort *rp = r->rp;
@@ -287,10 +358,14 @@ static void draw_line(struct Linktext_DATA *d, Object *obj, struct lt_rp *r, ULO
         else SetAPen(rp, d->pen[0] >= 0 ? (ULONG)d->pen[0] : _pens(obj)[MPEN_TEXT]);
         if (fl & LT_BOLD) style |= FSF_BOLD;
         if ((fl & LT_RUN_LINK) && !(fl & LT_NOUNDERLINE)) style |= FSF_UNDERLINED;
-        SetSoftStyle(rp, style, AskSoftStyle(rp));
-        Move(rp, x, base);
-        Text(rp, (STRPTR)d->content->text + pos, n);
-        SetSoftStyle(rp, FS_NORMAL, AskSoftStyle(rp));
+        if (d->utf8) {
+            draw_utf8(d, obj, rp, x, y, base, w, th, d->content->text + pos, n, fl);
+        } else {
+            SetSoftStyle(rp, style, AskSoftStyle(rp));
+            Move(rp, x, base);
+            Text(rp, (STRPTR)d->content->text + pos, n);
+            SetSoftStyle(rp, FS_NORMAL, AskSoftStyle(rp));
+        }
         x += w;
         pos += n;
     }
@@ -591,11 +666,53 @@ static BOOL clip_write(const char *s, ULONG n)
     return ok;
 }
 
+/* UTF-8: FTXT with a UTF8 chunk, and a CHRS copy in Latin-1 for readers
+   of 8-bit text ('?' for what Latin-1 has not). */
+static BOOL clip_write_utf8(const char *s, ULONG n)
+{
+    struct Library *iff_base = OpenLibrary((CONST_STRPTR)"iffparse.library", 39);
+    struct IFFHandle *iff;
+    UBYTE *latin;
+    ULONG i = 0, k = 0;
+    BOOL ok = FALSE;
+    if (!iff_base) return FALSE;
+    if (!(latin = (UBYTE *)AllocVec(n + 1, MEMF_ANY))) { CloseLibrary(iff_base); return FALSE; }
+    while (i < n) {
+        size_t len;
+        unsigned long cp = zt_decode(s, n, i, &len);
+        latin[k++] = cp < 256 ? (UBYTE)cp : '?';
+        i += (ULONG)len;
+    }
+    if ((iff = AllocIFF())) {
+        if ((iff->iff_Stream = (IPTR)OpenClipboard(0))) {
+            InitIFFasClip(iff);
+            if (!OpenIFF(iff, IFFF_WRITE)) {
+                ok = !PushChunk(iff, MAKE_ID('F','T','X','T'), MAKE_ID('F','O','R','M'), IFFSIZE_UNKNOWN)
+                     && !PushChunk(iff, 0, MAKE_ID('C','H','R','S'), (LONG)k)
+                     && WriteChunkBytes(iff, latin, (LONG)k) == (LONG)k
+                     && !PopChunk(iff)
+                     && !PushChunk(iff, 0, MAKE_ID('U','T','F','8'), (LONG)n)
+                     && WriteChunkBytes(iff, (APTR)s, (LONG)n) == (LONG)n
+                     && !PopChunk(iff)
+                     && !PopChunk(iff);
+                CloseIFF(iff);
+            }
+            CloseClipboard((struct ClipboardHandle *)iff->iff_Stream);
+        }
+        FreeIFF(iff);
+    }
+    FreeVec(latin);
+    CloseLibrary(iff_base);
+    return ok;
+}
+
 static void copy_selection(struct Linktext_DATA *d)
 {
     ULONG a = d->sel_anchor < d->sel_caret ? d->sel_anchor : d->sel_caret;
     ULONG b = d->sel_anchor < d->sel_caret ? d->sel_caret : d->sel_anchor;
-    if (d->content && a < b) clip_write(d->content->text + a, b - a);
+    if (!d->content || a >= b) return;
+    if (d->utf8) clip_write_utf8(d->content->text + a, b - a);
+    else clip_write(d->content->text + a, b - a);
 }
 
 /* ----------------------------------------------------------------- action */
@@ -946,6 +1063,7 @@ IPTR Linktext__MUIM_Linktext_SetDocument(Class *cl, Object *obj, struct MUIP_Lin
     if (status == LT_OK)
         c = lt_document_new((const char *)msg->Text, msg->Length == (ULONG)~0UL ? (lt_ulong)-1 : msg->Length,
                             in, msg->SpanCount, bin, msg->BlockCount, &status);
+    if (c) lt_set_utf8(c, d->utf8);
     if (in != stack) lt_free(in);
     if (bin != bstack) lt_free(bin);
     if (!c) return status;           /* the status numbers are the same */
@@ -1035,6 +1153,8 @@ static void set_tags(struct Linktext_DATA *d, Object *obj, struct TagItem *tags,
     while ((tag = NextTagItem(&state))) {
         switch (tag->ti_Tag) {
         case MUIA_Linktext_ActionHook: d->hook = (struct Hook *)tag->ti_Data; break;
+        case MUIA_Linktext_UTF8:       if (init) d->utf8 = tag->ti_Data != 0; break;
+        case MUIA_Linktext_FallbackFonts: if (init) d->fallbacks = (CONST_STRPTR *)tag->ti_Data; break;
         case MUIA_Linktext_Lines:      if (init && tag->ti_Data) d->want_lines = tag->ti_Data; break;
         case MUIA_Linktext_FixHeight:  if (init) d->fix_height = tag->ti_Data != 0; break;
         case MUIA_Linktext_Scroller:   if (init) d->scroller = (Object *)tag->ti_Data; break;
@@ -1154,6 +1274,7 @@ IPTR Linktext__OM_GET(Class *cl, Object *obj, struct opGet *msg)
     case MUIA_Linktext_MaxColumns: *msg->opg_Storage = d->max_columns; return TRUE;
     case MUIA_Linktext_Visible:    *msg->opg_Storage = d->shown ? (ULONG)visible(d, obj) : d->vis; return TRUE;
     case MUIA_Linktext_EmptyLine:  *msg->opg_Storage = d->empty8 ? d->empty8 : 8; return TRUE;
+    case MUIA_Linktext_UTF8:       *msg->opg_Storage = d->utf8; return TRUE;
     case MUIA_Linktext_TextColor:  *msg->opg_Storage = d->rgb[0]; return TRUE;
     case MUIA_Linktext_DimColor:   *msg->opg_Storage = d->rgb[1]; return TRUE;
     case MUIA_Linktext_AccentColor: *msg->opg_Storage = d->rgb[2]; return TRUE;
@@ -1273,6 +1394,67 @@ static UWORD dim_pen(Object *obj)
     return MPEN_HALFSHADOW;
 }
 
+/* The outline file of an AROS font: its .otag in FONTS: (or where the
+   name says) names it. 0 when there is none (a bitmap font). */
+static int font_file(struct TextFont *tf, char *out, size_t outn)
+{
+    char otag[300];
+    const char *name = tf && tf->tf_Message.mn_Node.ln_Name ? (const char *)tf->tf_Message.mn_Node.ln_Name : NULL;
+    unsigned char *buf;
+    size_t len;
+    BPTR fh;
+    LONG got;
+    int ok = 0;
+    if (!name || !*name) return 0;
+    len = strlen(name);
+    if (len > 5 && !strcmp(name + len - 5, ".font")) len -= 5;
+    if (len + 12 > sizeof otag) return 0;
+    if (strchr(name, ':')) otag[0] = 0;
+    else strcpy(otag, "FONTS:");
+    strncat(otag, name, len);
+    strcat(otag, ".otag");
+    if (!(fh = Open((CONST_STRPTR)otag, MODE_OLDFILE))) return 0;
+    if ((buf = (unsigned char *)AllocVec(8192, MEMF_ANY))) {
+        got = Read(fh, buf, 8192);
+        if (got > 0) ok = zt_otag_file(buf, (size_t)got, out, outn);
+        FreeVec(buf);
+    }
+    Close(fh);
+    return ok;
+}
+
+static const char *const default_fallbacks[] = {
+    "FONTS:TrueType/OpenSans-Regular.ttf", "FONTS:TrueType/VeraSans.ttf", NULL
+};
+
+/* The face sets: the font's own file, then the application's fallbacks,
+   then the defaults; Large is the normal set a quarter larger. */
+static struct zt_font *open_set(struct Linktext_DATA *d, struct TextFont *tf, int px)
+{
+    const char *paths[ZT_MAX_FACES];
+    char own[256];
+    int n = 0, i;
+    if (font_file(tf, own, sizeof own)) paths[n++] = own;
+    for (i = 0; d->fallbacks && d->fallbacks[i] && n < ZT_MAX_FACES; i++) paths[n++] = (const char *)d->fallbacks[i];
+    for (i = 0; default_fallbacks[i] && n < ZT_MAX_FACES; i++) paths[n++] = default_fallbacks[i];
+    return n ? zt_font_open(paths, n, px) : NULL;
+}
+
+static void utf8_fonts_setup(struct Linktext_DATA *d, Object *obj)
+{
+    struct TextFont *f = _font(obj);
+    int px = f ? f->tf_YSize : 13;
+    d->zf[0] = open_set(d, f, px);
+    d->zf[1] = d->fixed ? open_set(d, d->fixed, d->fixed->tf_YSize) : NULL;
+    d->zf[2] = open_set(d, f, px + (px / 4 > 3 ? px / 4 : 3));
+}
+
+static void utf8_fonts_cleanup(struct Linktext_DATA *d)
+{
+    int k;
+    for (k = 0; k < 3; k++) { zt_font_close(d->zf[k]); d->zf[k] = NULL; }
+}
+
 IPTR Linktext__MUIM_Setup(Class *cl, Object *obj, struct MUIP_Setup *msg)
 {
     struct Linktext_DATA *d = INST_DATA(cl, obj);
@@ -1280,6 +1462,7 @@ IPTR Linktext__MUIM_Setup(Class *cl, Object *obj, struct MUIP_Setup *msg)
     LONG above, below;
     if (!DoSuperMethodA(cl, obj, (Msg)msg)) return FALSE;
     fixed_font_setup(d, obj);
+    if (d->utf8) utf8_fonts_setup(d, obj);
     /* One line height for both fonts, on a common baseline. */
     f = _font(obj);
     x = d->fixed ? d->fixed : f;
@@ -1299,6 +1482,26 @@ IPTR Linktext__MUIM_Setup(Class *cl, Object *obj, struct MUIP_Setup *msg)
         d->large_base = d->base;
         d->largeh = d->lineh;
     }
+    if (d->utf8 && d->zf[0]) {
+        /* UTF-8: the line from the faces' own metrics */
+        LONG a = zt_font_ascent(d->zf[0]), b = zt_font_descent(d->zf[0]), k;
+        for (k = 1; k < 3; k++)
+            if (d->zf[k] && k == 1) {
+                if (zt_font_ascent(d->zf[k]) > a) a = zt_font_ascent(d->zf[k]);
+                if (zt_font_descent(d->zf[k]) > b) b = zt_font_descent(d->zf[k]);
+            }
+        d->base = a;
+        d->lineh = a + b + 1;
+        if (d->zf[2]) {
+            LONG la = zt_font_ascent(d->zf[2]) > a ? zt_font_ascent(d->zf[2]) : a;
+            LONG lb = zt_font_descent(d->zf[2]) > b ? zt_font_descent(d->zf[2]) : b;
+            d->large_base = la;
+            d->largeh = la + lb + 1;
+        } else {
+            d->large_base = d->base;
+            d->largeh = d->lineh;
+        }
+    }
     d->avg = 0;                    /* measured again at Show */
     d->dim_pen = dim_pen(obj);
     d->laid_w = -1;                /* the font may be another one now */
@@ -1314,6 +1517,7 @@ IPTR Linktext__MUIM_Cleanup(Class *cl, Object *obj, struct MUIP_Cleanup *msg)
     cancel_press(d, obj);
     DoMethod(_win(obj), MUIM_Window_RemEventHandler, (IPTR)&d->ehn);
     fixed_font_cleanup(d);
+    utf8_fonts_cleanup(d);
     release_pens(d, obj);
     d->setup = FALSE;
     return DoSuperMethodA(cl, obj, (Msg)msg);

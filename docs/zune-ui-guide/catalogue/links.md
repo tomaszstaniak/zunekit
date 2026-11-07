@@ -100,7 +100,8 @@ Every replacement is whole or not at all. `SetContent` and `SetDocument` return 
 
 ### Encoding and fonts
 
-- Offsets count bytes of the 8-bit text the class is given. Convert UTF-8 to the system's character set first, for example with codesets.library, and keep the UTF-8 original for copying and saving: the class copies its own 8-bit text.
+- By default the text is 8-bit, in the system's character set: offsets count its bytes, and the class copies it as it is. An application with UTF-8 text either converts it first (codesets.library) and keeps the original for copying and saving, or uses the UTF-8 mode.
+- With `MUIA_Linktext_UTF8` (zunekit's class; checked on AROS One 1.3 only, not yet on ABIv11 2026.09 or mainline) the text is UTF-8. Offsets still count bytes, but lines break, carets land and the pointer hits only between grapheme clusters, so a letter stays with its combining mark. The class draws through FreeType from the window font's own TrueType file (named by its `.otag` in `FONTS:`), then from the fallback files (`MUIA_Linktext_FallbackFonts`, then Open Sans and Vera Sans); a character no file has is a box, and the text keeps it. A copy puts UTF-8 on the clipboard with a Latin-1 copy for older readers. Not yet: shaping of complex scripts, right-to-left text, colour emoji; combining marks sit where FreeType's advance puts them. A bitmap-only font has no file to draw from: the fallbacks are used instead.
 - The normal font is the object's (`MUIA_Font`, the list font by default). Bold is that font's bold style. The fixed-width font is the user's fixed font from the MUI settings, opened at `MUIM_Setup` and closed at `MUIM_Cleanup`; when it cannot be opened, fixed spans use the normal font.
 
 ### Actions

@@ -63,6 +63,24 @@
    smaller than a line of text. Lines are then not all of one height:
    First, LineCount and Visible still count lines. */
 #define MUIA_Linktext_EmptyLine  (MUIB_Linktext | 0x09)
+/* [I.G] BOOL: the text is UTF-8 (default FALSE: the system's 8-bit set).
+   Offsets of spans, blocks and the selection stay bytes; lines break,
+   carets land and the pointer hits only between grapheme clusters, so a
+   letter is never parted from its combining mark. The text is measured and
+   drawn through FreeType (freetype2.library) from the window fonts' own
+   TrueType/OpenType files (their .otag in FONTS:), then the fallback faces;
+   a character no face has shows as a box and stays in the text. A copy
+   puts FTXT with a UTF8 chunk and a Latin-1 CHRS copy on the clipboard.
+   Not done: shaping of complex scripts, right-to-left text, colour glyphs;
+   combining marks are drawn where FreeType's advance puts them. When the
+   window font has no outline file and no fallback opens, the class draws
+   nothing for the text; check the window fonts first. */
+#define MUIA_Linktext_UTF8       (MUIB_Linktext | 0x0E)
+/* [I..] STRPTR *: NULL-ended font files tried after the window fonts' own,
+   in order, for characters they lack (default: FONTS:TrueType/OpenSans-
+   Regular.ttf, FONTS:TrueType/VeraSans.ttf, after these). The array and
+   its strings stay the caller's and must live as long as the object. */
+#define MUIA_Linktext_FallbackFonts (MUIB_Linktext | 0x0F)
 /* [ISG] ULONG: colours of the text, of Span_Dim text and of Span_Accent
    text and links, each MUIV_Linktext_RGB(0xrrggbb) or 0 for the pen the
    class takes from the user's settings (text, a half pen, text). The

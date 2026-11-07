@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "linktext_core.h"
+#include "zk_text.h"
 
 static long fail_after = -1, live = 0;
 void *lt_alloc(size_t n)
@@ -960,6 +961,82 @@ static void tables(void)
     OK(live == 0);
 }
 
+/* A font for UTF-8: 8 pixels a code point, marks and joiners none. */
+static long font_u8(void *ctx, const char *s, lt_ulong n, lt_ulong fl)
+{
+    lt_ulong i = 0;
+    long w = 0;
+    (void)ctx;
+    while (i < n) {
+        size_t len;
+        unsigned long cp = zt_decode(s, n, i, &len);
+        if (!(cp >= 0x300 && cp < 0x370) && cp != 0x200d) w += fl & LT_FIXED ? 10 : 8;
+        i += len;
+    }
+    return w;
+}
+
+/* UTF-8 mode: lines start and end on cluster boundaries at any width, hit
+   testing gives boundaries, and keeping lines equals laying out whole. */
+static void utf8_mode(void)
+{
+    static const char *pieces[] = { "a", "word ", "Za\xc5\xbc\xc3\xb3\xc5\x82\xc4\x87 ", "e\xcc\x81", "\xc3\xa9",
+        "\xf0\x9d\x84\x9e", "\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x91\xa7", "\xd0\x96\xd0\xb8\xd0\xb7\xd0\xbd\xd1\x8c ",
+        " ", "\n", "x\xcc\x81\xcc\x82", "/path/", "\xe2\x88\x80x\xe2\x88\x88" };
+    unsigned seed = 11;
+    int round;
+    for (round = 0; round < 500; round++) {
+        char t[600];
+        lt_content *c, *c2;
+        lt_line *l = NULL, *lk = NULL, *l2 = NULL;
+        lt_ulong n = 0, nk = 0, n2 = 0, i, len;
+        long width;
+        int k;
+        t[0] = 0;
+        for (k = 0; k < 40; k++) {
+            seed = seed * 1103515245u + 12345u;
+            strcat(t, pieces[(seed >> 8) % 13]);
+        }
+        len = (lt_ulong)strlen(t);
+        seed = seed * 1103515245u + 12345u;
+        width = 6 + (long)((seed >> 8) % 120);
+        c = mk(t, NULL, 0);
+        lt_set_utf8(c, 1);
+        OK(lt_layout(c, width, 8, font_u8, NULL, &l, &n));
+        for (i = 0; i < n; i++) {
+            OK(zt_cluster_start(c->text, len, l[i].start) == l[i].start || l[i].start == len);
+            OK(l[i].start + l[i].len == len || zt_cluster_start(c->text, len, l[i].start + l[i].len) == l[i].start + l[i].len);
+            OK(l[i].start + l[i].shown == len
+               || zt_cluster_start(c->text, len, l[i].start + l[i].shown) == l[i].start + l[i].shown);
+            if (i + 1 < n && l[i + 1].start > l[i].start + l[i].len) OK(c->text[l[i].start + l[i].len] == '\n');
+            {
+                lt_ulong caret = 99999;
+                long x;
+                for (x = -2; x < width + 10; x += 3) {
+                    lt_hit(c, &l[i], x, font_u8, NULL, &caret);
+                    OK(caret == len || zt_cluster_start(c->text, len, caret) == caret);
+                }
+            }
+        }
+        /* the same text grown at its end: kept lines equal a whole layout */
+        {
+            char t2[700];
+            seed = seed * 1103515245u + 12345u;
+            snprintf(t2, sizeof t2, "%s%s", t, pieces[(seed >> 8) % 13]);
+            c2 = mk(t2, NULL, 0);
+            lt_set_utf8(c2, 1);
+            OK(lt_layout(c2, width, 8, font_u8, NULL, &l2, &n2));
+            OK(lt_layout_keep(c2, width, 8, font_u8, NULL, c, l, n, lt_common_prefix(c, c2), &lk, &nk));
+            OK(same_lines(l2, n2, lk, nk));
+            lt_free(l2); lt_free(lk);
+            lt_content_unref(c2);
+        }
+        lt_free(l);
+        lt_content_unref(c);
+    }
+    OK(live == 0);
+}
+
 int main(void)
 {
     validation();
@@ -980,6 +1057,7 @@ int main(void)
     heights_and_padding();
     keep_layout();
     tables();
+    utf8_mode();
     printf("linktext core: %d checks passed\n", checks);
     return 0;
 }

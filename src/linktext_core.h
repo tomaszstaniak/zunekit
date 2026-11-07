@@ -44,6 +44,10 @@ typedef struct {
     lt_block *blocks;
     lt_ulong nblocks;
     int any_font;              /* a span measures in another font */
+    int utf8;                  /* the text is UTF-8: lines break, carets land and
+                                  lines are hit only on grapheme cluster
+                                  boundaries (zk_text); set it before laying
+                                  the content out, lt_set_utf8 */
 } lt_content;
 
 enum { LT_OK, LT_RANGE, LT_ORDER, LT_TARGET, LT_TOOLARGE, LT_NOMEM };
@@ -92,6 +96,8 @@ lt_content *lt_document_new(const char *text, lt_ulong len, const lt_span_in *sp
    blocks are copied: (lt_ulong)-1 counts up to the first NUL. */
 lt_ulong lt_text_length(const char *text, lt_ulong len);
 void lt_content_ref(lt_content *c);
+/* Marks c as UTF-8 (on 1) or as the system's 8-bit set (0, as created). */
+void lt_set_utf8(lt_content *c, int on);
 void lt_content_unref(lt_content *c);
 
 /* Width in pixels of n bytes; `flags` has LT_BOLD and LT_FIXED of the run. */

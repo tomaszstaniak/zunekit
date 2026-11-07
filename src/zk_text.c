@@ -4,8 +4,26 @@
 #include "utf8proc.h"
 
 #ifdef __AROS__
+#include <proto/exec.h>
 #include <proto/freetype2.h>
+/* freetype2.library, opened while a font is open (zt_font_open). */
+struct Library *FreeType2Base;
+static int ft_users;
+static int ft_open(void)
+{
+    if (!ft_users && !(FreeType2Base = OpenLibrary((CONST_STRPTR)"freetype2.library", 0))) return 0;
+    ft_users++;
+    return 1;
+}
+static void ft_close(void)
+{
+    if (ft_users && !--ft_users) { CloseLibrary(FreeType2Base); FreeType2Base = NULL; }
+}
 #else
+static int ft_open(void) { return 1; }
+static void ft_close(void) {}
+#endif
+#ifndef __AROS__
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #endif
@@ -221,8 +239,9 @@ zt_font *zt_font_open(const char *const *paths, int count, int px)
     zt_font *f;
     int i;
     if (px < 1 || count < 1) return NULL;
-    if (!(f = (zt_font *)calloc(1, sizeof *f))) return NULL;
-    if (FT_Init_FreeType(&f->lib)) { free(f); return NULL; }
+    if (!ft_open()) return NULL;
+    if (!(f = (zt_font *)calloc(1, sizeof *f))) { ft_close(); return NULL; }
+    if (FT_Init_FreeType(&f->lib)) { free(f); ft_close(); return NULL; }
     f->px = px;
     for (i = 0; i < count && f->nfaces < ZT_MAX_FACES; i++) {
         FT_Face face;
@@ -230,7 +249,7 @@ zt_font *zt_font_open(const char *const *paths, int count, int px)
         if (FT_Set_Pixel_Sizes(face, 0, (FT_UInt)px)) { FT_Done_Face(face); continue; }
         f->face[f->nfaces++] = face;
     }
-    if (!f->nfaces) { FT_Done_FreeType(f->lib); free(f); return NULL; }
+    if (!f->nfaces) { FT_Done_FreeType(f->lib); free(f); ft_close(); return NULL; }
     return f;
 }
 
@@ -241,6 +260,7 @@ void zt_font_close(zt_font *f)
     for (i = 0; i < f->nfaces; i++) FT_Done_Face(f->face[i]);
     FT_Done_FreeType(f->lib);
     free(f);
+    ft_close();
 }
 
 int zt_font_faces(const zt_font *f) { return f ? f->nfaces : 0; }

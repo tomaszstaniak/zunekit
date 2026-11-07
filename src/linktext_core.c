@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "linktext_core.h"
+#include "zk_text.h"
 #include <string.h>
 
 #define MAX_TEXT   (64UL * 1024 * 1024)
@@ -136,6 +137,7 @@ lt_ulong lt_text_length(const char *text, lt_ulong len)
 }
 
 void lt_content_ref(lt_content *c) { c->refs++; }
+void lt_set_utf8(lt_content *c, int on) { c->utf8 = on != 0; }
 
 void lt_content_unref(lt_content *c)
 {
@@ -184,10 +186,18 @@ static lt_ulong fit(const lt_content *c, lt_ulong pos, lt_ulong max, long width,
        whole paragraph for every line. */
     if (width >= 0 && hi > (lt_ulong)width + 1) hi = (lt_ulong)width + 1;
     if (hi < 1) hi = 1;
-    if (lt_width(c, pos, hi, m, ctx) <= width) return hi;
-    while (hi - lo > 1) {
+    if (lt_width(c, pos, hi, m, ctx) <= width) lo = hi;
+    else while (hi - lo > 1) {
         lt_ulong mid = lo + (hi - lo) / 2;
         if (lt_width(c, pos, mid, m, ctx) <= width) lo = mid; else hi = mid;
+    }
+    if (c->utf8 && pos + lo < pos + max) {
+        /* back to the cluster it is in; a cluster too wide for the line
+           still goes on it, whole */
+        lt_ulong b = zt_cluster_start(c->text, c->len, pos + lo);
+        if (b <= pos) b = zt_next_cluster(c->text, c->len, pos);
+        if (b > pos + max) b = pos + max;
+        lo = b - pos;
     }
     return lo;
 }
@@ -728,6 +738,25 @@ long lt_hit(const lt_content *c, const lt_line *line, long x, lt_measure m, void
     }
     if (lt_width(c, line->start, hi, m, ctx) <= x) {
         *caret = line->start + line->shown;
+        return -1;
+    }
+    if (c->utf8) {
+        /* cluster by cluster: x is on the cluster whose span holds it */
+        lt_ulong a = line->start, end = line->start + line->shown;
+        long w0 = 0;
+        while (a < end) {
+            lt_ulong b = zt_next_cluster(c->text, c->len, a);
+            long w1;
+            if (b > end) b = end;
+            w1 = lt_width(c, line->start, b - line->start, m, ctx);
+            if (x < w1) {
+                *caret = x - w0 >= w1 - x ? b : a;
+                return (long)a;
+            }
+            w0 = w1;
+            a = b;
+        }
+        *caret = end;
         return -1;
     }
     /* Largest k whose width is at most x: x is on character k. */

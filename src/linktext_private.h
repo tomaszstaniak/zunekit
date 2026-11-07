@@ -25,6 +25,9 @@ struct Linktext_DATA
     struct TextFont *large;      /* the big font, NULL: not larger     */
     Object *large_obj;
     struct TextFont *large_own;  /* opened here when Big is not larger  */
+    BOOL utf8;                   /* MUIA_Linktext_UTF8                 */
+    CONST_STRPTR *fallbacks;     /* MUIA_Linktext_FallbackFonts        */
+    struct zt_font *zf[3];       /* UTF-8: normal, fixed, large; Setup..Cleanup */
     LONG largeh, large_base;     /* a line with Large text             */
     UWORD dim_pen;               /* MPEN_* for Span_Dim                */
     ULONG empty8;                /* empty paragraph, eighths of a line  */
