@@ -6,7 +6,9 @@
 # (C++11 without exceptions or RTTI, thread safety on through
 # src/aros/hb-aros-config.h; it needs no C++ runtime, pthread.library or
 # libatomic, which the script checks). Link it with -lfreetype2 -lm.
-# ZK_CC, ZK_CXX, ZK_AR, ZK_NM name other compilers (the Pi's). ZK_TC and ZK_SDK, when set, name the toolchain directory and the SDK
+# ZK_CC, ZK_CXX, ZK_AR, ZK_NM name other compilers (the Pi's); ZK_CXXFLAGS
+# adds C++ flags, e.g. where C++ standard headers are on a toolchain that
+# has none (only headers are used: nothing of a C++ library is linked). ZK_TC and ZK_SDK, when set, name the toolchain directory and the SDK
 # (a program passes its own, so the library matches it); otherwise they
 # come from local.env as for the other scripts. The classes themselves
 # (src/zk_edit.c, src/zk_edit_core.c, src/linktext_*.c, src/zk_linktext.c)
@@ -28,7 +30,7 @@ AR=${ZK_AR:-$TC/x86_64-aros-ar}
 NM=${ZK_NM:-$TC/x86_64-aros-nm}
 # HarfBuzz with its thread safety on: atomics are GCC builtins, its locks
 # exec semaphores (src/aros/hb-aros-config.h). No exceptions or RTTI.
-"$CXX" -std=c++11 -O2 -fno-exceptions -fno-rtti -DHB_CONFIG_OVERRIDE_H='"hb-aros-config.h"' -I"$R/src/aros" \
+"$CXX" -std=c++11 -O2 -fno-exceptions -fno-rtti ${ZK_CXXFLAGS:-} -DHB_CONFIG_OVERRIDE_H='"hb-aros-config.h"' -I"$R/src/aros" \
   -DHB_NO_MMAP -DHB_NO_SETLOCALE --sysroot="$SDK" -I"$SDK/include" \
   -c "$R/third_party/harfbuzz/src/harfbuzz.cc" -o "$O/harfbuzz.o"
 # It must need no C++ runtime: a guard for a function-local static, a
