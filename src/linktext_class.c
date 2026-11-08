@@ -296,9 +296,16 @@ static void draw_utf8(struct Linktext_DATA *d, Object *obj, struct RastPort *rp,
     unsigned zf = (fl & LT_BOLD) ? ZT_BOLD : 0;
     struct ColorMap *cm = _screen(obj) ? _screen(obj)->ViewPort.ColorMap : NULL;
     if (!z || !cm || xb <= xa || bh <= 0) return;
+    /* out of memory: the run's place marked as not current, not left
+       empty as if the text were not there */
+    if (!zt_ready(z, s, n, zf)) { zt_stale(rp, pen, xa, y, xb - 1, y + bh - 1); SetAPen(rp, pen); return; }
     rw = zt_measure(z, s, n, zf);
     bw = rw + 4;                                     /* ink can reach a little past the advance */
-    if (!(cov = (UBYTE *)AllocVec((ULONG)(bw * bh), MEMF_ANY | MEMF_CLEAR))) return;
+    if (!(cov = (UBYTE *)AllocVec((ULONG)(bw * bh), MEMF_ANY | MEMF_CLEAR))) {
+        zt_stale(rp, pen, xa, y, xb - 1, y + bh - 1);
+        SetAPen(rp, pen);
+        return;
+    }
     zt_draw(z, s, n, zf, cov, bw, bh, bw, 0, base - y);
     c0 = xa - rx;
     c1 = xb - rx;
@@ -1423,6 +1430,7 @@ IPTR Linktext__MUIM_Setup(Class *cl, Object *obj, struct MUIP_Setup *msg)
     if (!DoSuperMethodA(cl, obj, (Msg)msg)) return FALSE;
     fixed_font_setup(d, obj);
     if (d->utf8) {
+        zt_charset_refresh();               /* a changed CHARSET is seen at each window opening */
         utf8_fonts_setup(d, obj);
         if (!d->zf[0]) {
             /* UTF-8 with nothing to draw it with: refuse, rather than a

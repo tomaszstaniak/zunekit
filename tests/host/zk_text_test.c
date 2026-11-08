@@ -8,6 +8,18 @@
 #include "zk_text.h"
 
 static int checks;
+
+/* Allocation failures for zk_text.c only (built with -Dmalloc=tm
+   -Drealloc=tr -Dcalloc=tc): the n-th call from now fails. */
+static long fail_in = -1;
+static int failing(void) { if (fail_in < 0) return 0; if (fail_in-- == 0) return 1; return 0; }
+void *tm(size_t n);
+void *tr(void *p, size_t n);
+void *tc(size_t a, size_t b);
+void *tm(size_t n) { return failing() ? NULL : malloc(n); }
+void *tr(void *p, size_t n) { return failing() ? NULL : realloc(p, n); }
+void *tc(size_t a, size_t b) { return failing() ? NULL : calloc(a, b); }
+
 #define OK(x) do { checks++; if (!(x)) { printf("FAILED line %d: %s\n", __LINE__, #x); exit(1); } } while (0)
 
 /* The review's text set (2026-11-07). */
@@ -91,6 +103,35 @@ static void fonts(const char *dir)
        composed one (the shaper puts the mark over its letter); missing
        glyphs take a box; a joiner draws nothing */
     OK(zt_measure(f, "", 0, 0) == 0);
+
+    /* zt_ready: the shaping had, or said it was not; nothing is drawn as
+       if it were the text when it was not */
+    {
+        unsigned char cov[16 * 20];
+        long k;
+        OK(zt_ready(f, "", 0, 0) == 1);
+        fail_in = 0;
+        OK(zt_ready(f, "ready?", 6, 0) == 0);
+        fail_in = -1;
+        fail_in = 0;
+        memset(cov, 0, sizeof cov);
+        OK(zt_draw(f, "ready!", 6, 0, cov, 16, 20, 16, 0, 15) == 0);
+        fail_in = -1;
+        for (k = 0; k < (long)sizeof cov && !cov[k]; k++) ;
+        OK(k == (long)sizeof cov);
+        OK(zt_ready(f, "ready?", 6, 0) == 1);
+        fail_in = 0;                          /* kept: no allocation now */
+        OK(zt_ready(f, "ready?", 6, 0) == 1 && zt_measure(f, "ready?", 6, 0) > 0);
+        fail_in = -1;
+        /* every allocation of a shaping in turn */
+        for (k = 0; k < 6; k++) {
+            fail_in = k;
+            (void)zt_ready(f, POLISH " " CYRIL, strlen(POLISH " " CYRIL), ZT_BOLD);
+            fail_in = -1;
+        }
+        OK(zt_ready(f, POLISH " " CYRIL, strlen(POLISH " " CYRIL), ZT_BOLD) == 1);
+    }
+
     w = zt_measure(f, E_COMPOSED, 2, 0);
     wd = zt_measure(f, E_DECOMPOSED, 3, 0);
     OK(w > 0 && wd >= w - 1 && wd <= w + 1);

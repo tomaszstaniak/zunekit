@@ -449,7 +449,7 @@ static IPTR ZkEdit_Draw(struct IClass *cl, Object *obj, struct MUIP_Draw *msg)
     size_t sa, sb, tn;
     const char *t;
     UBYTE *px, *cov, ink[3], selbg[3], selink[3];
-    BOOL rgb;
+    BOOL rgb, ready;
     DoSuperMethodA(cl, obj, (Msg)msg);
     if (!(msg->flags & (MADF_DRAWOBJECT | MADF_DRAWUPDATE)) || w <= 0 || h <= 0 || !d->font) return 0;
     if (!relayout(d, obj)) return 0;
@@ -462,13 +462,30 @@ static IPTR ZkEdit_Draw(struct IClass *cl, Object *obj, struct MUIP_Draw *msg)
     rgb_of(obj, _pens(obj)[MPEN_SHINE], selink);
     rgb = zt_cgx_base && GetBitMapAttr(_rp(obj)->BitMap, BMA_DEPTH) > 8;
     dx = PADX - (d->single ? d->hscroll : 0);
+    /* everything the drawing needs first: when it cannot be had, the last
+       drawing stays, marked as not current, rather than an empty field */
+    cov = (UBYTE *)AllocVec((ULONG)(w * lh), MEMF_ANY);
+    px = cov && rgb ? (UBYTE *)AllocVec((ULONG)(w * h * 3), MEMF_ANY) : NULL;
+    ready = cov && (!rgb || px);
+    for (i = 0; ready && i < (LONG)d->view.nlines; i++) {
+        const ze_line *l = &d->view.line[i];
+        LONG y = l->y - d->top + PADY;
+        if (y >= h) break;
+        if (y + lh > 0 && !zt_ready(d->font, t + l->start, l->len, 0)) ready = FALSE;
+    }
+    if (!ready) {
+        if (px) FreeVec(px);
+        if (cov) FreeVec(cov);
+        zt_stale(_rp(obj), _pens(obj)[MPEN_SHADOW], _mleft(obj), _mtop(obj), _mright(obj), _mbottom(obj));
+        /* said after the drawing, not from inside it */
+        strcpy(d->message, "not enough memory to draw the text");
+        DoMethod(_app(obj), MUIM_Application_PushMethod, (IPTR)obj, 3, MUIM_Set, MUIA_ZkEdit_Message, (IPTR)d->message);
+        return 0;
+    }
     /* an update draws over what is there: the background first, so no old
        ink, caret or scrolled line stays */
     if (msg->flags & MADF_DRAWUPDATE)
         DoMethod(obj, MUIM_DrawBackground, _mleft(obj), _mtop(obj), w, h, _mleft(obj), _mtop(obj), 0);
-    if (!(cov = (UBYTE *)AllocVec((ULONG)(w * lh), MEMF_ANY))) return 0;
-    px = rgb ? (UBYTE *)AllocVec((ULONG)(w * h * 3), MEMF_ANY) : NULL;
-    if (rgb && !px) { FreeVec(cov); return 0; }
     if (px) ReadPixelArray(px, 0, 0, w * 3, _rp(obj), _mleft(obj), _mtop(obj), w, h, RECTFMT_RGB);
     for (i = 0; i < (LONG)d->view.nlines; i++) {
         const ze_line *l = &d->view.line[i];
@@ -646,6 +663,7 @@ static IPTR ZkEdit_Setup(struct IClass *cl, Object *obj, Msg msg)
     struct ZkEditData *d = INST_DATA(cl, obj);
     struct TextFont *tf;
     if (!DoSuperMethodA(cl, obj, msg)) return FALSE;
+    zt_charset_refresh();                   /* a changed CHARSET is seen at each window opening */
     tf = _font(obj);
     if (d->fixed) d->fixed_tf = fixed_font(d, obj);
     {
