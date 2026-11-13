@@ -5,12 +5,12 @@ updated: 2026-10-21
 
 # Development
 
-## Supported scope
+## Initial zk_table validation (2026-10-21)
 
 | Target | Status |
 |---|---|
 | AROS x86_64 ABIv11 | built; the test program and the first user (Unarc) run on the ABIv11 2026.09 base and AROS One 1.3 |
-| AROS mainline (ABIv1) | not built yet |
+| AROS mainline (ABIv1) | not covered by this initial validation |
 
 ## Setup and commands
 
@@ -41,3 +41,9 @@ sources, at a pinned revision of this repository.
 Machine values belong in ignored `local.env`; `scripts/env.sh` loads it
 without overriding variables already set, and resolves relative paths from
 this directory.
+
+## Additional components
+
+The component interfaces and their source files are documented in [Usage](usage.md). `scripts/build-tests.sh v1|v11|pi` builds the toolbar, image view and drag-out test programs with the matching toolchain and SDK configured in `local.env`. `scripts/test-host.sh` checks the portable zoom and filename logic on the host. These commands do not establish runtime support for every component on every target.
+
+For the Linktext test, run `scripts/build-linktext.sh v1` or `scripts/build-linktext.sh v11`. The mainline build requires both `ZUNEKIT_TOOLCHAIN_V1` and `ZUNEKIT_SDK_V1`; there is no default workstation path.
