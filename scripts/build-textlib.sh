@@ -17,7 +17,7 @@ set -euo pipefail
 . "$(dirname "$0")/env.sh"
 R=$ZUNEKIT_ROOT
 case ${1:?v1 or v11} in
-  v1)  TC=${ZK_TC:-${ZUNEKIT_TOOLCHAIN_V1:-/Volumes/arosv1/toolchain-mainline}}; SDK=${ZK_SDK:-${ZUNEKIT_SDK_V1:?set in local.env}} ;;
+  v1)  TC=${ZK_TC:-${ZUNEKIT_TOOLCHAIN_V1:?set in local.env}}; SDK=${ZK_SDK:-${ZUNEKIT_SDK_V1:?set in local.env}} ;;
   v11) TC=${ZK_TC:-$ZUNEKIT_TOOLCHAIN_ABIV11}; SDK=${ZK_SDK:-$ZUNEKIT_SDK_ABIV11} ;;
   *) echo "v1 or v11" >&2; exit 2 ;;
 esac
