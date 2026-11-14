@@ -414,6 +414,21 @@ static int colour(const char *dir, const char *emoji_font)
         zt_font_close(g2);
     }
     zt_font_close(f);
+    /* a text face that has an emoji's outline before the colour face (a
+       window font with emoji): the emoji still comes in colour, a
+       character with a text form by default stays with the text face */
+    {
+        const char *order[3], *mono = getenv("ZUNEKIT_MONO_EMOJI_FONT");
+        zt_font *t = NULL;
+        order[0] = mono; order[1] = p1; order[2] = emoji_font;
+        if (mono && *mono && (t = zt_font_open(order, 3, 16)) && zt_font_faces(t) == 3) {
+            OK(zt_has_colour(t, "\xf0\x9f\x98\x80", 4, 0) == 1);                 /* 😀 */
+            OK(zt_has_colour(t, FAMILY, strlen(FAMILY), 0) == 1);                    /* 👩‍👧 */
+            OK(zt_has_colour(t, "\xe2\x98\xba", 3, 0) == 0);                      /* ☺: text */
+            OK(zt_has_colour(t, "\xe2\x98\xba\xef\xb8\x8f", 6, 0) == 1);       /* ☺ + VS16: emoji */
+        } else printf("zk_text: no monochrome emoji face (ZUNEKIT_MONO_EMOJI_FONT): order checks skipped\n");
+        zt_font_close(t);
+    }
     return 1;
 }
 

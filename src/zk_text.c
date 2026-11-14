@@ -391,22 +391,33 @@ int zt_face_for(zt_font *f, unsigned long cp)
     return -1;
 }
 
-/* The face for the cluster s[a..b): the first with all its characters,
-   else the first with its first character, else -1. */
+/* Shown as emoji by default: the emoji planes (pictographs, emoticons,
+   transport, flags' regional indicators, supplemental symbols), or any
+   character asked for as emoji with U+FE0F. Characters with a text form by
+   default (U+263A without U+FE0F) stay with the text faces. */
+static int emoji_cp(unsigned long cp) { return cp >= 0x1f000 && cp <= 0x1faff; }
+
+/* The face for the cluster s[a..b): for an emoji, the first colour face
+   with all its characters (before the text faces, whose outline forms of
+   some emoji would otherwise win); then the first face with all its
+   characters, else the first with its first character, else -1. */
 static int cluster_face(zt_font *f, const char *s, size_t a, size_t b)
 {
     unsigned all = (1u << f->nfaces) - 1, first = 0;
     size_t i = a;
-    int seen = 0, k;
+    int seen = 0, k, emoji = 0;
     while (i < b) {
         size_t len;
         unsigned long cp = zt_decode(s, b, i, &len);
         i += len;
+        if (cp == 0xfe0f || emoji_cp(cp)) emoji = 1;
         if (ignorable(cp)) continue;
         if (!seen) { first = covered(f, cp); seen = 1; }
         all &= covered(f, cp);
     }
     if (!seen) return 0;                        /* only ignorables: draws nothing */
+    if (emoji)
+        for (k = 0; k < f->nfaces; k++) if (f->colour[k] && (all & (1u << k))) return k;
     for (k = 0; k < f->nfaces; k++) if (all & (1u << k)) return k;
     for (k = 0; k < f->nfaces; k++) if (first & (1u << k)) return k;
     return -1;
