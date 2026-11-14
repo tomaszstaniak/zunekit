@@ -82,6 +82,8 @@ int zt_otag_file(const unsigned char *otag, size_t n, char *out, size_t outn);
 /* --- fonts -------------------------------------------------------------- */
 
 typedef struct zt_font zt_font;
+/* A 32-bit pixel, 0xAARRGGBB. */
+typedef unsigned int zt_u32;
 
 #define ZT_MAX_FACES 8
 #define ZT_BOLD 1u           /* emboldened outlines, wider by the same amount
@@ -132,6 +134,20 @@ size_t zt_hit(zt_font *f, const char *s, size_t n, long x, unsigned flags);
    y. Coverage adds up and saturates. Returns the width (zt_measure). */
 long zt_draw(zt_font *f, const char *s, size_t n, unsigned flags, unsigned char *cov, int w, int h,
              int stride, long x, long y);
+
+/* Colour glyphs. A face with colour bitmap strikes and no outlines (Noto
+   Color Emoji: CBDT) is opened at its nearest strike and scaled to px; its
+   glyphs are colour pictures, kept scaled in a cache of the font's.
+   zt_has_colour says whether s[0..n) shaped has one: 1, 0, or -1 when out
+   of memory for the shaping. zt_draw_argb draws as zt_draw, except that
+   colour glyphs go into argb (premultiplied 0xAARRGGBB, the same w x h,
+   stride pixels a row) when it is not NULL; zt_draw (argb NULL) puts their
+   alpha into cov, so a caller without the colour layer shows their shape
+   in its pen. A colour glyph that cannot be had (memory) is left out of
+   argb and shown as its box in cov. */
+int zt_has_colour(zt_font *f, const char *s, size_t n, unsigned flags);
+long zt_draw_argb(zt_font *f, const char *s, size_t n, unsigned flags, unsigned char *cov,
+                  zt_u32 *argb, int w, int h, int stride, long x, long y);
 
 /* The bytes a key gave as UTF-8 text: each byte decoded by dec (from the
    caller's 8-bit set; 0 when the set has nothing there) and only then

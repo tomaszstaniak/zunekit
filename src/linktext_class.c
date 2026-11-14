@@ -306,14 +306,21 @@ static void draw_utf8(struct Linktext_DATA *d, Object *obj, struct RastPort *rp,
         SetAPen(rp, pen);
         return;
     }
-    zt_draw(z, s, n, zf, cov, bw, bh, bw, 0, base - y);
-    c0 = xa - rx;
-    c1 = xb - rx;
-    /* the run's last part takes the ink past the last advance */
-    if (c1 >= rw) c1 = bw;
-    if (c0 < 0) c0 = 0;
-    if (c1 > bw) c1 = bw;
-    zt_blit(rp, cm, pen, cov, bw, bh, c0, c1, rx, y);
+    {
+        /* colour glyphs into their own layer; without memory for it, their
+           shape in the pen */
+        zt_u32 *argb = zt_has_colour(z, s, n, zf) > 0
+            ? (zt_u32 *)AllocVec((ULONG)(bw * bh) * sizeof *argb, MEMF_ANY | MEMF_CLEAR) : NULL;
+        zt_draw_argb(z, s, n, zf, cov, argb, bw, bh, bw, 0, base - y);
+        c0 = xa - rx;
+        c1 = xb - rx;
+        /* the run's last part takes the ink past the last advance */
+        if (c1 >= rw) c1 = bw;
+        if (c0 < 0) c0 = 0;
+        if (c1 > bw) c1 = bw;
+        zt_blit(rp, cm, pen, cov, bw, bh, c0, c1, rx, y);
+        if (argb) { zt_blit_argb(rp, cm, pen, argb, bw, bh, c0, c1, rx, y); FreeVec(argb); }
+    }
     if ((fl & LT_RUN_LINK) && !(fl & LT_NOUNDERLINE)) {
         Move(rp, xa, base + 1);
         Draw(rp, xb - 1, base + 1);

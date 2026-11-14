@@ -442,6 +442,25 @@ static void blend(UBYTE *px, LONG w, LONG h, const UBYTE *cov, LONG lh, LONG y, 
     }
 }
 
+/* A line's colour glyphs (premultiplied ARGB, w x lh) over the pixels. */
+static void paint_argb(UBYTE *px, LONG w, LONG h, const zt_u32 *argb, LONG lh, LONG y)
+{
+    LONG r, x, k;
+    for (r = 0; r < lh; r++) {
+        if (y + r < 0 || y + r >= h) continue;
+        for (x = 0; x < w; x++) {
+            zt_u32 v = argb[r * w + x];
+            ULONG inv = 255 - (v >> 24);
+            UBYTE *p = px + ((y + r) * w + x) * 3;
+            if (!(v >> 24)) continue;
+            for (k = 0; k < 3; k++) {
+                ULONG o = ((v >> (16 - 8 * k)) & 255) + (p[k] * inv + 127) / 255;
+                p[k] = (UBYTE)(o > 255 ? 255 : o);
+            }
+        }
+    }
+}
+
 static IPTR ZkEdit_Draw(struct IClass *cl, Object *obj, struct MUIP_Draw *msg)
 {
     struct ZkEditData *d = INST_DATA(cl, obj);
@@ -449,6 +468,8 @@ static IPTR ZkEdit_Draw(struct IClass *cl, Object *obj, struct MUIP_Draw *msg)
     size_t sa, sb, tn;
     const char *t;
     UBYTE *px, *cov, ink[3], selbg[3], selink[3];
+    zt_u32 *argb = NULL;                    /* made for the first line with a colour glyph */
+    int argb_failed = 0;
     BOOL rgb, ready;
     DoSuperMethodA(cl, obj, (Msg)msg);
     if (!(msg->flags & (MADF_DRAWOBJECT | MADF_DRAWUPDATE)) || w <= 0 || h <= 0 || !d->font) return 0;
@@ -503,10 +524,23 @@ static IPTR ZkEdit_Draw(struct IClass *cl, Object *obj, struct MUIP_Draw *msg)
             else { SetAPen(_rp(obj), _pens(obj)[MPEN_FILL]); RectFill(_rp(obj), _mleft(obj) + s0, _mtop(obj) + y, _mleft(obj) + s1 - 1, _mtop(obj) + y + lh - 1); }
         }
         memset(cov, 0, (size_t)(w * lh));
-        zt_draw(d->font, t + l->start, l->len, 0, cov, w, lh, w, dx, zt_font_ascent(d->font));
-        if (px) blend(px, w, h, cov, lh, y, s0, s1, ink, selink);
-        else {
-            zt_blit(_rp(obj), _screen(obj)->ViewPort.ColorMap, _pens(obj)[MPEN_TEXT], cov, w, lh, 0, w, _mleft(obj), _mtop(obj) + y);
+        {
+            /* colour glyphs into their own layer; without memory for it,
+               their shape in the text's colour */
+            int col = zt_has_colour(d->font, t + l->start, l->len, 0) > 0;
+            if (col && !argb && !argb_failed && !(argb = (zt_u32 *)AllocVec((ULONG)(w * lh) * sizeof *argb, MEMF_ANY)))
+                argb_failed = 1;
+            if (col && argb) memset(argb, 0, (size_t)(w * lh) * sizeof *argb);
+            zt_draw_argb(d->font, t + l->start, l->len, 0, cov, col ? argb : NULL, w, lh, w, dx, zt_font_ascent(d->font));
+            if (px) {
+                blend(px, w, h, cov, lh, y, s0, s1, ink, selink);
+                if (col && argb) paint_argb(px, w, h, argb, lh, y);
+            } else {
+                zt_blit(_rp(obj), _screen(obj)->ViewPort.ColorMap, _pens(obj)[MPEN_TEXT], cov, w, lh, 0, w, _mleft(obj), _mtop(obj) + y);
+                if (col && argb)
+                    zt_blit_argb(_rp(obj), _screen(obj)->ViewPort.ColorMap, _pens(obj)[MPEN_TEXT], argb, w, lh, 0, w,
+                                 _mleft(obj), _mtop(obj) + y);
+            }
         }
     }
     /* the caret, while active and nothing is selected */
@@ -521,6 +555,7 @@ static IPTR ZkEdit_Draw(struct IClass *cl, Object *obj, struct MUIP_Draw *msg)
         WritePixelArray(px, 0, 0, w * 3, _rp(obj), _mleft(obj), _mtop(obj), w, h, RECTFMT_RGB);
         FreeVec(px);
     }
+    if (argb) FreeVec(argb);
     FreeVec(cov);
     return 0;
 }

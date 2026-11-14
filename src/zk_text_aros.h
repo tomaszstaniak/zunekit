@@ -58,9 +58,9 @@ typedef struct zt_fontset {
     CONST_STRPTR const *fallbacks;
 } zt_fontset;
 
-/* The system's set, all in FONTS:TrueType: DejaVu Sans, DejaVu Sans Mono
-   and Noto Emoji (installed with AROS for this layer), then Open Sans,
-   Vera Sans and Vera Sans Mono. Classes without a set of their own use
+/* The system's set, all in FONTS:TrueType: DejaVu Sans, DejaVu Sans Mono,
+   Noto Color Emoji when it is there, and Noto Emoji (installed with AROS
+   for this layer), then Open Sans, Vera Sans and Vera Sans Mono. Classes without a set of their own use
    it. A program can bring its own faces instead (zt_fontset). */
 const zt_fontset *zt_system_fontset(void);
 
@@ -84,6 +84,14 @@ int zt_fonts_check(const zt_fontset *set, char *why, ULONG whylen);
    256 colours or fewer, complete but not smoothed. */
 int zt_blit(struct RastPort *rp, struct ColorMap *cm, ULONG pen, const UBYTE *cov, LONG bw, LONG bh,
             LONG c0, LONG c1, LONG x, LONG y);
+
+/* Composites the columns c0..c1-1 of an ARGB layer (premultiplied
+   0xAARRGGBB, bw x bh, from zt_draw_argb) at x + c0, y: over the pixels
+   read back on a screen of more than 256 colours. On others, or when the
+   buffer for it cannot be had (ZT_ERR_MEMORY), pixels of half alpha and
+   more are set with pen: the glyph's shape in one colour. ZT_OK otherwise. */
+int zt_blit_argb(struct RastPort *rp, struct ColorMap *cm, ULONG pen, const zt_u32 *argb, LONG bw, LONG bh,
+                 LONG c0, LONG c1, LONG x, LONG y);
 
 /* Marks x0..x1, y0..y1 (inclusive) as not current: a sparse dotted
    pattern in pen over what is there, needing no memory. A class that

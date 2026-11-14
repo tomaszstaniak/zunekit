@@ -344,6 +344,79 @@ static void folding(void)
     OK(!zt_fold("\xff", 1, &n));
 }
 
+/* A colour bitmap face (Noto Color Emoji, CBDT) as a fallback after Open
+   Sans: opened at its strike, scaled to px, drawn into the ARGB layer or as
+   alpha into the coverage. */
+static int colour(const char *dir, const char *emoji_font)
+{
+    char p1[600];
+    const char *paths[2];
+    zt_font *f;
+    static unsigned char cov[64 * 40], cov2[64 * 40];
+    static zt_u32 argb[64 * 40];
+    long w, w2;
+    int i, ink = 0, coloured = 0, covink = 0;
+    if (!emoji_font || !*emoji_font) { printf("zk_text: colour face not given (ZUNEKIT_COLOR_FONT): colour checks skipped\n"); return 0; }
+    snprintf(p1, sizeof p1, "%s/OpenSans-Regular.ttf", dir);
+    paths[0] = p1; paths[1] = emoji_font;
+    OK((f = zt_font_open(paths, 2, 16)) != NULL);
+    OK(zt_font_faces(f) == 2);                                   /* the strike face opened */
+    OK(zt_face_for(f, 0x1f600) == 1 && zt_face_for(f, 'A') == 0);
+    OK(zt_has_colour(f, "A", 1, 0) == 0);
+    OK(zt_has_colour(f, "A\xf0\x9f\x98\x80", 5, 0) == 1);
+    w = zt_measure(f, "\xf0\x9f\x98\x80", 4, 0);
+    OK(w >= 16 && w <= 24);                                      /* its advance at 16 px, not at the strike */
+    w = zt_measure(f, FAMILY, strlen(FAMILY), 0);
+    OK(w >= 16 && w <= 24);                                      /* the joined family is one glyph */
+    memset(argb, 0, sizeof argb);
+    memset(cov, 0, sizeof cov);
+    w = zt_draw_argb(f, "A\xf0\x9f\x98\x80", 5, 0, cov, argb, 64, 40, 64, 2, 28);
+    for (i = 0; i < 64 * 40; i++) {
+        zt_u32 v = argb[i];
+        unsigned a = v >> 24, r = (v >> 16) & 255, g = (v >> 8) & 255, b = v & 255;
+        if (a) ink++;
+        if (a > 128 && (r > g + 40 || g > b + 40)) coloured++;   /* the yellow face */
+        OK(r <= a && g <= a && b <= a);                          /* premultiplied */
+    }
+    OK(ink > 100 && coloured > 30);
+    for (i = 0; i < 12 * 40; i++) if (cov[(i / 12) * 64 + i % 12]) covink++;
+    OK(covink > 10);                                             /* the A went into the coverage */
+    /* without the layer: the emoji's alpha into the coverage */
+    memset(cov2, 0, sizeof cov2);
+    w2 = zt_draw(f, "A\xf0\x9f\x98\x80", 5, 0, cov2, 64, 40, 64, 2, 28);
+    OK(w2 == w);
+    for (i = 0, covink = 0; i < 64 * 40; i++) if (cov2[i]) covink++;
+    OK(covink > ink);
+    /* drawn again from the glyph cache: the same pixels */
+    {
+        static zt_u32 again[64 * 40];
+        memset(again, 0, sizeof again);
+        memset(cov2, 0, sizeof cov2);
+        zt_draw_argb(f, "A\xf0\x9f\x98\x80", 5, 0, cov2, again, 64, 40, 64, 2, 28);
+        OK(!memcmp(again, argb, sizeof argb));
+    }
+    /* no memory for a colour glyph: its box, nothing in the layer */
+    {
+        static zt_u32 none[64 * 40];
+        zt_font *g2 = zt_font_open(paths, 2, 17);               /* a new font: an empty glyph cache */
+        long k, any = 0;
+        OK(g2 != NULL);
+        OK(zt_ready(g2, "\xf0\x9f\x98\x81", 4, 0));
+        memset(none, 0, sizeof none);
+        memset(cov2, 0, sizeof cov2);
+        fail_in = 0;
+        zt_draw_argb(g2, "\xf0\x9f\x98\x81", 4, 0, cov2, none, 64, 40, 64, 2, 28);
+        fail_in = -1;
+        for (k = 0; k < 64 * 40; k++) any |= (long)none[k];
+        OK(!any);
+        for (k = 0, covink = 0; k < 64 * 40; k++) if (cov2[k]) covink++;
+        OK(covink > 0);                                          /* the box */
+        zt_font_close(g2);
+    }
+    zt_font_close(f);
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     otag();
@@ -352,6 +425,7 @@ int main(int argc, char **argv)
     keys();
     folding();
     fonts(argc > 1 ? argv[1] : "tests/fixtures/fonts");
+    colour(argc > 1 ? argv[1] : "tests/fixtures/fonts", argc > 2 ? argv[2] : getenv("ZUNEKIT_COLOR_FONT"));
     printf("zk_text: %d checks passed\n", checks);
     return 0;
 }

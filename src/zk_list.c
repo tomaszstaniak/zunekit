@@ -181,10 +181,17 @@ static void cell_draw(struct ZkCellData *c, Object *obj)
             note_status(d, ZKLIST_MEMORY);
             break;
         }
-        zt_draw(d->font, s + r[i].start, r[i].len, f, cov, (int)bw, (int)fh, (int)bw, 0, asc);
-        c1 = x + w - xx;
-        if (c1 > bw) c1 = bw;
-        zt_blit(rp, cm, pen, cov, bw, fh, 0, c1, xx, top);
+        {
+            /* colour glyphs into their own layer; without memory for it,
+               their shape in the pen */
+            zt_u32 *argb = zt_has_colour(d->font, s + r[i].start, r[i].len, f) > 0
+                ? (zt_u32 *)AllocVec((ULONG)(bw * fh) * sizeof *argb, MEMF_ANY | MEMF_CLEAR) : NULL;
+            zt_draw_argb(d->font, s + r[i].start, r[i].len, f, cov, argb, (int)bw, (int)fh, (int)bw, 0, asc);
+            c1 = x + w - xx;
+            if (c1 > bw) c1 = bw;
+            zt_blit(rp, cm, pen, cov, bw, fh, 0, c1, xx, top);
+            if (argb) { zt_blit_argb(rp, cm, pen, argb, bw, fh, 0, c1, xx, top); FreeVec(argb); }
+        }
         if (r[i].flags & ZL_UNDERLINE) {
             LONG e = xx + rw - 1;
             if (e > x + w - 1) e = x + w - 1;

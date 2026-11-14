@@ -12,7 +12,9 @@
  *   - the active row, selected, still has ink (its pen);
  *   - a row replaced (MUIM_NList_ReplaceSingle) is drawn with its new text,
  *     wider than before;
- *   - the entries are the UTF-8 bytes given (MUIM_NList_GetEntry).
+ *   - the entries are the UTF-8 bytes given (MUIM_NList_GetEntry);
+ *   - with NotoColorEmoji.ttf in FONTS, the emoji row has pixels of strong
+ *     colour (colour glyphs, not their shape in the pen).
  * Without AUTO the window stays open to be looked at. */
 #define MUIMASTER_YES_INLINE_STDARG
 #include <stdio.h>
@@ -48,7 +50,9 @@ static const char *const rows[] = {
     "\033uUnderlined\033n then plain\tyesterday",
     "ASCII only row\t12:00",
     "Ünïcödé façade, naïve café\tdemain",
+    "Emoji: 😀 🎉 👩\xe2\x80\x8d👧 🇵🇱\t🙂",
 };
+#define EMOJI_ROW 8
 #define NROWS (sizeof rows / sizeof rows[0])
 
 static const char *const replaced = "Nowy tytuł: żółw, λόγος, ёлка, 🐢\tteraz";
@@ -71,6 +75,7 @@ AROS_UFH3(IPTR, disp_fn, AROS_UFHA(struct Hook *, h, A0), AROS_UFHA(char **, col
 static struct Hook disp_hook = { {0}, (HOOKFUNC)disp_fn, 0, 0 };
 
 static Object *app, *win, *list;
+static int colour_face;                 /* NotoColorEmoji.ttf in the FONTS drawer */
 
 /* Pixels in x0..x1 of row band y0..y1 that differ from the band's first
    pixel's colour (the row's background where the text does not start). */
@@ -85,6 +90,22 @@ static long ink(LONG x0, LONG x1, LONG y0, LONG y1)
     for (y = y0; y <= y1; y++)
         for (x = x0; x <= x1; x++)
             if (ReadRGBPixel(rp, x, y) != bg) n++;
+    return n;
+}
+
+/* Pixels of a strong colour (a channel 60 above another) in x0..x1 of the
+   band: colour emoji drawn, not their shape in the pen. */
+static long colourful(LONG x0, LONG x1, LONG y0, LONG y1)
+{
+    struct RastPort *rp = _rp(list);
+    long n = 0;
+    LONG x, y;
+    if (!rp || !CyberGfxBase) return -1;
+    for (y = y0; y <= y1; y++)
+        for (x = x0; x <= x1; x++) {
+            ULONG v = ReadRGBPixel(rp, x, y), r = (v >> 16) & 255, g = (v >> 8) & 255, b = v & 255;
+            if (r > g + 60 || r > b + 60 || g > b + 60 || b > r + 60) n++;
+        }
     return n;
 }
 
@@ -153,6 +174,14 @@ static void checks(void)
     GetAttr(MUIA_NList_Active, list, &act);
     row_ink(2, &a, &b);
     CHECK(act == 2 && a > 20 && b > 20, "active row 2 ink %ld | %ld", a, b);
+    {
+        LONG y0, y1, split;
+        if (band(EMOJI_ROW, &y0, &y1, &split)) {
+            long c = colourful(_mleft(list) + 2, split - 6, y0, y1);
+            L("NOTE emoji row: %ld pixels of strong colour", c);
+            if (colour_face) CHECK(c > 40, "emoji row in colour (%ld pixels)", c);
+        } else L("NOTE emoji row not visible");
+    }
     row_ink(6, &before, &b);
     DoMethod(list, MUIM_NList_ReplaceSingle, (IPTR)replaced, 6, NOWRAP, ALIGN_LEFT);
     settle();
@@ -167,8 +196,8 @@ int main(int argc, char **argv)
     ULONG sigs = 0;
     int done = 0, i, autorun = 0;
     const char *logname = NULL, *fonts = NULL;
-    static char p1[300], p2[300];
-    static CONST_STRPTR prop[2], fall[3];
+    static char p1[300], p2[300], p3[300];
+    static CONST_STRPTR prop[2], fall[4];
     static zt_fontset set;
     struct Hook *dh = &disp_hook;
 
@@ -182,8 +211,11 @@ int main(int argc, char **argv)
     if (fonts) {
         snprintf(p1, sizeof p1, "%s", fonts); AddPart((STRPTR)p1, (CONST_STRPTR)"DejaVuSans.ttf", sizeof p1);
         snprintf(p2, sizeof p2, "%s", fonts); AddPart((STRPTR)p2, (CONST_STRPTR)"NotoEmoji.ttf", sizeof p2);
+        snprintf(p3, sizeof p3, "%s", fonts); AddPart((STRPTR)p3, (CONST_STRPTR)"NotoColorEmoji.ttf", sizeof p3);
+        { BPTR l = Lock((CONST_STRPTR)p3, SHARED_LOCK); colour_face = l != 0; if (l) UnLock(l); }
         prop[0] = (CONST_STRPTR)p1; prop[1] = NULL;
-        fall[0] = (CONST_STRPTR)p2; fall[1] = (CONST_STRPTR)p1; fall[2] = NULL;
+        /* colour emoji first when the drawer has them */
+        fall[0] = (CONST_STRPTR)p3; fall[1] = (CONST_STRPTR)p2; fall[2] = (CONST_STRPTR)p1; fall[3] = NULL;
         set.proportional = prop; set.monospace = NULL; set.fallbacks = fall;
     }
     CHECK(zk_list_init(), "class made");

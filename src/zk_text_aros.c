@@ -186,7 +186,9 @@ static CONST_STRPTR sys_prop[] = { (CONST_STRPTR)"FONTS:TrueType/DejaVuSans.ttf"
     (CONST_STRPTR)"FONTS:TrueType/OpenSans-Regular.ttf", (CONST_STRPTR)"FONTS:TrueType/VeraSans.ttf", NULL };
 static CONST_STRPTR sys_mono[] = { (CONST_STRPTR)"FONTS:TrueType/DejaVuSansMono.ttf",
     (CONST_STRPTR)"FONTS:TrueType/VeraMono.ttf", NULL };
-static CONST_STRPTR sys_fall[] = { (CONST_STRPTR)"FONTS:TrueType/NotoEmoji.ttf", NULL };
+/* colour emoji first where the system has them, then their outlines */
+static CONST_STRPTR sys_fall[] = { (CONST_STRPTR)"FONTS:TrueType/NotoColorEmoji.ttf",
+    (CONST_STRPTR)"FONTS:TrueType/NotoEmoji.ttf", NULL };
 static const zt_fontset sys_set = { sys_prop, sys_mono, sys_fall };
 
 const zt_fontset *zt_system_fontset(void) { return &sys_set; }
@@ -285,6 +287,43 @@ int zt_blit(struct RastPort *rp, struct ColorMap *cm, ULONG pen, const UBYTE *co
         for (j = 0; j < bh; j++)
             for (i = c0; i < c1; i++)
                 if (cov[j * bw + i] >= 128) WritePixel(rp, x + i, y + j);
+    }
+    return r;
+}
+
+int zt_blit_argb(struct RastPort *rp, struct ColorMap *cm, ULONG pen, const zt_u32 *argb, LONG bw, LONG bh,
+                 LONG c0, LONG c1, LONG x, LONG y)
+{
+    LONG i, j;
+    UBYTE *px = NULL;
+    int r = ZT_OK;
+    if (c0 < 0) c0 = 0;
+    if (c1 > bw) c1 = bw;
+    if (c1 <= c0 || bh <= 0) return ZT_OK;
+    if (zt_cgx_base && cm && GetBitMapAttr(rp->BitMap, BMA_DEPTH) > 8 &&
+        !(px = (UBYTE *)AllocVec((ULONG)((c1 - c0) * bh * 3), MEMF_ANY)))
+        r = ZT_ERR_MEMORY;                  /* drawn below with the pen, not left out */
+    if (px) {
+        LONG pw = c1 - c0;
+        ReadPixelArray(px, 0, 0, pw * 3, rp, x + c0, y, pw, bh, RECTFMT_RGB);
+        for (j = 0; j < bh; j++)
+            for (i = 0; i < pw; i++) {
+                zt_u32 v = argb[j * bw + c0 + i];
+                ULONG a = v >> 24, inv = 255 - a, k;
+                UBYTE *p = px + (j * pw + i) * 3;
+                if (!a) continue;
+                for (k = 0; k < 3; k++) {
+                    ULONG sv = (v >> (16 - 8 * k)) & 255, o = sv + (p[k] * inv + 127) / 255;
+                    p[k] = (UBYTE)(o > 255 ? 255 : o);
+                }
+            }
+        WritePixelArray(px, 0, 0, pw * 3, rp, x + c0, y, pw, bh, RECTFMT_RGB);
+        FreeVec(px);
+    } else {
+        SetAPen(rp, pen);
+        for (j = 0; j < bh; j++)
+            for (i = c0; i < c1; i++)
+                if ((argb[j * bw + i] >> 24) >= 128) WritePixel(rp, x + i, y + j);
     }
     return r;
 }

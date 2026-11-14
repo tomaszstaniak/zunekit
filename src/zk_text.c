@@ -234,6 +234,11 @@ int zt_otag_file(const unsigned char *otag, size_t n, char *out, size_t outn)
 
 #define COVER_CACHE 1024
 #define SHAPE_CACHE 24
+#define COLOUR_CACHE 32
+
+/* A colour glyph scaled to the font's size: premultiplied ARGB, its left
+   and top from the pen and the baseline in pixels. */
+struct cglyph { int face; unsigned gid; int w, h, left, top; zt_u32 *px; unsigned long age; };
 
 struct cover { unsigned long cp; unsigned mask; int used; };
 
@@ -259,8 +264,10 @@ struct zt_font {
     hb_font_t *hb[ZT_MAX_FACES];
     int nfaces, px;
     long bold26;                      /* emboldening and its extra advance, 26.6 */
+    int colour[ZT_MAX_FACES];         /* a colour bitmap face: its strike's ppem, else 0 */
     struct cover cover[COVER_CACHE];
     struct shaped cache[SHAPE_CACHE];
+    struct cglyph cglyph[COLOUR_CACHE];
     unsigned long age;
     unsigned long fallback, missing, shaped;
 };
@@ -291,14 +298,30 @@ zt_font *zt_font_open(const char *const *paths, int count, int px)
         FT_Face face;
         hb_face_t *hf;
         hb_font_t *hb;
+        int strike = 0;
         if (!paths[i] || FT_New_Face(f->lib, paths[i], 0, &face)) continue;
-        if (FT_Set_Pixel_Sizes(face, 0, (FT_UInt)px)) { FT_Done_Face(face); continue; }
+        if (!FT_IS_SCALABLE(face) && FT_HAS_COLOR(face) && face->num_fixed_sizes > 0) {
+            /* colour strikes only: the smallest at least px, else the
+               largest; drawn scaled to px */
+            int k, best = -1, largest = 0;
+            for (k = 0; k < face->num_fixed_sizes; k++) {
+                long pp = face->available_sizes[k].y_ppem >> 6;
+                if (pp > face->available_sizes[largest].y_ppem >> 6) largest = k;
+                if (pp >= px && (best < 0 || pp < face->available_sizes[best].y_ppem >> 6)) best = k;
+            }
+            if (best < 0) best = largest;
+            if (FT_Select_Size(face, best) || !face->size->metrics.y_ppem) { FT_Done_Face(face); continue; }
+            strike = face->size->metrics.y_ppem;
+        } else if (FT_Set_Pixel_Sizes(face, 0, (FT_UInt)px)) { FT_Done_Face(face); continue; }
         hf = hb_face_create_for_tables(font_table, face, NULL);
         hb = hb_font_create(hf);
         hb_face_destroy(hf);
         if (!hb || hb == hb_font_get_empty()) { FT_Done_Face(face); continue; }
         hb_ot_font_set_funcs(hb);
-        hb_font_set_scale(hb, (int)face->size->metrics.x_ppem * 64, (int)face->size->metrics.y_ppem * 64);
+        /* the advances at px: HarfBuzz scales the font's own units */
+        if (strike) hb_font_set_scale(hb, px * 64, px * 64);
+        else hb_font_set_scale(hb, (int)face->size->metrics.x_ppem * 64, (int)face->size->metrics.y_ppem * 64);
+        f->colour[f->nfaces] = strike;
         f->face[f->nfaces] = face;
         f->hb[f->nfaces] = hb;
         f->nfaces++;
@@ -318,6 +341,7 @@ void zt_font_close(zt_font *f)
     int i;
     if (!f) return;
     for (i = 0; i < SHAPE_CACHE; i++) drop(&f->cache[i]);
+    for (i = 0; i < COLOUR_CACHE; i++) free(f->cglyph[i].px);
     for (i = 0; i < f->nfaces; i++) { hb_font_destroy(f->hb[i]); FT_Done_Face(f->face[i]); }
     FT_Done_FreeType(f->lib);
     free(f);
@@ -621,8 +645,83 @@ static void box(zt_font *f, unsigned char *cov, int w, int h, int stride, long x
     for (yy = top; yy < y; yy++) { put(cov, w, h, stride, x0, yy, 255); put(cov, w, h, stride, x1, yy, 255); }
 }
 
+/* A colour glyph scaled to px, from the cache or made now (an area
+   average of the strike's premultiplied pixels); NULL when it cannot be
+   had. */
+static const struct cglyph *colour_glyph(zt_font *f, int fi, unsigned gid)
+{
+    struct cglyph *c, *old = NULL;
+    FT_Face face = f->face[fi];
+    FT_GlyphSlot slot;
+    const FT_Bitmap *b;
+    long sp = f->colour[fi];
+    int i, dw, dh, dx, dy;
+    for (i = 0; i < COLOUR_CACHE; i++) {
+        c = &f->cglyph[i];
+        if (c->px && c->face == fi && c->gid == gid) { c->age = ++f->age; return c; }
+        if (!old || !c->px || (old->px && c->age < old->age)) old = c;
+    }
+    if (FT_Load_Glyph(face, gid, FT_LOAD_COLOR)) return NULL;
+    slot = face->glyph;
+    b = &slot->bitmap;
+    if (slot->format != FT_GLYPH_FORMAT_BITMAP || b->pixel_mode != FT_PIXEL_MODE_BGRA || !b->width || !b->rows)
+        return NULL;
+    dw = (int)(((long)b->width * f->px + sp - 1) / sp);
+    dh = (int)(((long)b->rows * f->px + sp - 1) / sp);
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    c = old;
+    free(c->px);
+    c->px = NULL;
+    if (!(c->px = (zt_u32 *)malloc(sizeof *c->px * (size_t)dw * (size_t)dh))) return NULL;
+    for (dy = 0; dy < dh; dy++) {
+        unsigned y0 = (unsigned)((long)dy * b->rows / dh), y1 = (unsigned)((long)(dy + 1) * b->rows / dh);
+        if (y1 <= y0) y1 = y0 + 1;
+        for (dx = 0; dx < dw; dx++) {
+            unsigned x0 = (unsigned)((long)dx * b->width / dw), x1 = (unsigned)((long)(dx + 1) * b->width / dw);
+            unsigned long sb = 0, sg = 0, sr = 0, sa = 0, cnt = 0, yy, xx;
+            if (x1 <= x0) x1 = x0 + 1;
+            for (yy = y0; yy < y1 && yy < b->rows; yy++) {
+                const unsigned char *row = b->pitch >= 0 ? b->buffer + (size_t)yy * (size_t)b->pitch
+                                                         : b->buffer + (size_t)(b->rows - 1 - yy) * (size_t)(-b->pitch);
+                for (xx = x0; xx < x1 && xx < b->width; xx++) {
+                    const unsigned char *p = row + xx * 4;      /* B, G, R, A, premultiplied */
+                    sb += p[0]; sg += p[1]; sr += p[2]; sa += p[3]; cnt++;
+                }
+            }
+            if (!cnt) cnt = 1;
+            c->px[(size_t)dy * (size_t)dw + (size_t)dx] = (zt_u32)((sa / cnt) << 24 | (sr / cnt) << 16 | (sg / cnt) << 8 | (sb / cnt));
+        }
+    }
+    c->face = fi;
+    c->gid = gid;
+    c->w = dw;
+    c->h = dh;
+    c->left = (int)((long)slot->bitmap_left * f->px / sp);
+    c->top = (int)((long)slot->bitmap_top * f->px / sp);
+    c->age = ++f->age;
+    return c;
+}
+
+int zt_has_colour(zt_font *f, const char *s, size_t n, unsigned flags)
+{
+    const struct shaped *e;
+    size_t i;
+    if (!n) return 0;
+    if (!(e = get(f, s, n, flags))) return -1;
+    for (i = 0; i < e->ng; i++)
+        if (e->g[i].face >= 0 && f->colour[e->g[i].face]) return 1;
+    return 0;
+}
+
 long zt_draw(zt_font *f, const char *s, size_t n, unsigned flags, unsigned char *cov, int w, int h,
              int stride, long x, long y)
+{
+    return zt_draw_argb(f, s, n, flags, cov, NULL, w, h, stride, x, y);
+}
+
+long zt_draw_argb(zt_font *f, const char *s, size_t n, unsigned flags, unsigned char *cov,
+                  zt_u32 *argb, int w, int h, int stride, long x, long y)
 {
     const struct shaped *e;
     size_t i;
@@ -636,6 +735,28 @@ long zt_draw(zt_font *f, const char *s, size_t n, unsigned flags, unsigned char 
         long px0 = x + round26(g->pen + g->dx), py0 = y - round26(g->dy);
         unsigned r, c;
         if (g->face < 0) { box(f, cov, w, h, stride, x + round26(g->pen), y); continue; }
+        if (f->colour[g->face]) {
+            const struct cglyph *cg = colour_glyph(f, g->face, g->gid);
+            int cr, cc;
+            if (!cg) { box(f, cov, w, h, stride, x + round26(g->pen), y); continue; }
+            for (cr = 0; cr < cg->h; cr++)
+                for (cc = 0; cc < cg->w; cc++) {
+                    long xx = px0 + cg->left + cc, yy = py0 - cg->top + cr;
+                    zt_u32 sp = cg->px[(size_t)cr * (size_t)cg->w + (size_t)cc];
+                    if (xx < 0 || yy < 0 || xx >= w || yy >= h || !(sp >> 24)) continue;
+                    if (argb) {
+                        /* premultiplied over */
+                        zt_u32 *dp = &argb[(size_t)yy * (size_t)stride + (size_t)xx], d = *dp, o = 0;
+                        unsigned inv = 255 - (sp >> 24), sh;
+                        for (sh = 0; sh < 32; sh += 8) {
+                            unsigned v = ((sp >> sh) & 255) + (((d >> sh) & 255) * inv + 127) / 255;
+                            o |= (zt_u32)(v > 255 ? 255 : v) << sh;
+                        }
+                        *dp = o;
+                    } else put(cov, w, h, stride, xx, yy, sp >> 24);
+                }
+            continue;
+        }
         face = f->face[g->face];
         if (FT_Load_Glyph(face, g->gid, FT_LOAD_DEFAULT | FT_LOAD_NO_BITMAP)) continue;
         slot = face->glyph;

@@ -4,6 +4,7 @@
 # zk_text needs FreeType (pkg-config freetype2) and builds HarfBuzz from
 # third_party/harfbuzz once (one C++11 unit, as on AROS).
 set -euo pipefail
+. "$(dirname "$0")/env.sh"
 R=$(cd "$(dirname "$0")/.." && pwd)
 B=$R/build/host
 mkdir -p "$B"
@@ -30,5 +31,5 @@ $CC $F $ZT -o "$B/ze-test" "$R/tests/host/zk_edit_test.c" "$B/zk_edit_core.o" $Z
 "$B/zk-core-test"
 "$B/zl-test"
 "$B/lt-test"
-"$B/zt-test" "$R/tests/fixtures/fonts"
+"$B/zt-test" "$R/tests/fixtures/fonts" "${ZUNEKIT_COLOR_FONT:-}"
 "$B/ze-test" "$R/tests/fixtures/fonts"
