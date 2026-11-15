@@ -23,6 +23,7 @@ Components:
 - `zk_imageview`: zoomable ARGB images with scrolling, panning and drawing hooks.
 - `zk_dragout`: file dragging to Wanderer drawers and application windows.
 - `zk_glarea`: an area drawn with OpenGL or on the CPU, chosen at run time from what the system offers.
+- `zk_glsurface`: the same choice and texture path without the class, for a view that already owns its rectangle.
 
 ## Start here
 

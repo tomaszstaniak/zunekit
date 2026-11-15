@@ -393,3 +393,37 @@ The area was not checked while partly covered by another window in OpenGL
 mode. OpenGL needs a large stack (8 MB in the test).
 
 Compile `src/zk_glarea.c` and link `-lGL`.
+
+## zk_glsurface
+
+The part of `zk_glarea` a program can use without the class: for an object
+that already owns a rectangle of a window and composes its picture in
+memory (a page view, a canvas). Plain C functions, usable from C++.
+
+```c
+#include "zk_glsurface.h"
+
+/* when the rectangle is known (MUIM_Show): */
+s = zk_glsurface_open(_window(obj), _mleft(obj), _mtop(obj), _mwidth(obj), _mheight(obj),
+                      ZK_GLSURFACE_AUTO);            /* or _CPU, _GPU */
+/* when drawing: */
+if (s)
+    zk_glsurface_present(s, pixels, w, h, stride, ZK_GLSURFACE_BGRA);   /* or _RGBA */
+else
+    ...the program's own CPU path...
+/* when the rectangle goes away (MUIM_Hide): */
+zk_glsurface_close(s);
+```
+
+`zk_glsurface_open()` returns NULL when the CPU should be used:
+`ZK_GLSURFACE_CPU` was asked for, no context could be made, or (with
+`ZK_GLSURFACE_AUTO`) the renderer is a software rasteriser.
+`zk_glsurface_last_reason()`, `zk_glsurface_last_info()` and
+`zk_glsurface_last_software()` say what the last call found.
+`ZK_GLSURFACE_BGRA` is cairo's ARGB32 on little endian machines.
+
+Limits: checked on mainline x86_64 under QEMU with Mesa softpipe, in a
+browser's page view (the whole picture is uploaded on every update). No
+hardware driver, ABIv11 or Raspberry Pi run yet. OpenGL needs a large stack.
+
+Compile `src/zk_glsurface.c` and link `-lGL`.
