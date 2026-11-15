@@ -235,8 +235,8 @@ int zt_fonts_check(const zt_fontset *set, char *why, ULONG whylen)
         if (!p || !f) {
             r = e;
             m = e == ZT_ERR_MEMORY ? "not enough memory to open the fonts"
-                                   : "none of the outline fonts for Unicode text opened (the program's "
-                                     "Fonts drawer, FONTS:TrueType/DejaVuSans.ttf, FONTS:TrueType/OpenSans-Regular.ttf)";
+                                   : "none of the outline fonts for Unicode text opened (the program's own "
+                                     "fonts, FONTS:TrueType/DejaVuSans.ttf, FONTS:TrueType/OpenSans-Regular.ttf)";
         }
         zt_font_close(f);
         zt_font_close(p);
