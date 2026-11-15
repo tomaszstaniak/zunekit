@@ -24,13 +24,16 @@ esac
 B=${2:?outdir}
 mkdir -p "$B/zktext-obj"
 O=$B/zktext-obj
+# Source paths in the objects (assert messages, __FILE__) name the
+# repository, not the machine it was built on.
+MAP="-ffile-prefix-map=$R=zunekit"
 CXX=${ZK_CXX:-$TC/x86_64-aros-g++}
 CC=${ZK_CC:-$TC/x86_64-aros-gcc}
 AR=${ZK_AR:-$TC/x86_64-aros-ar}
 NM=${ZK_NM:-$TC/x86_64-aros-nm}
 # HarfBuzz with its thread safety on: atomics are GCC builtins, its locks
 # exec semaphores (src/aros/hb-aros-config.h). No exceptions or RTTI.
-"$CXX" -std=c++11 -O2 -fno-exceptions -fno-rtti ${ZK_CXXFLAGS:-} -DHB_CONFIG_OVERRIDE_H='"hb-aros-config.h"' -I"$R/src/aros" \
+"$CXX" -std=c++11 -O2 $MAP -fno-exceptions -fno-rtti ${ZK_CXXFLAGS:-} -DHB_CONFIG_OVERRIDE_H='"hb-aros-config.h"' -I"$R/src/aros" \
   -DHB_NO_MMAP -DHB_NO_SETLOCALE --sysroot="$SDK" -I"$SDK/include" \
   -c "$R/third_party/harfbuzz/src/harfbuzz.cc" -o "$O/harfbuzz.o"
 # It must need no C++ runtime: a guard for a function-local static, a
@@ -42,7 +45,7 @@ fi
 CF="-std=gnu99 -O2 -Wall -Wextra -Werror=implicit-function-declaration -Wno-unused-parameter -Wno-pointer-sign"
 INC="-I$SDK/include -I$SDK/include/freetype -I$R/src -I$R/third_party/utf8proc -I$R/third_party/harfbuzz/src -DUTF8PROC_STATIC"
 for c in src/zk_text.c src/zk_text_aros.c third_party/utf8proc/utf8proc.c; do
-  "$CC" --sysroot="$SDK" $CF $INC -c "$R/$c" -o "$O/$(basename "$c" .c).o"
+  "$CC" --sysroot="$SDK" $CF $MAP $INC -c "$R/$c" -o "$O/$(basename "$c" .c).o"
 done
 rm -f "$B/libzktext.a"
 "$AR" rcs "$B/libzktext.a" "$O/harfbuzz.o" "$O/zk_text.o" "$O/zk_text_aros.o" "$O/utf8proc.o"
