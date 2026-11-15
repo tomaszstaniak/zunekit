@@ -346,3 +346,50 @@ recognised. Wanderer may show the new file only after the drawer is
 updated.
 
 Compile `src/zk_dragout.c` and `src/zk_dragout_core.c`.
+
+## zk_glarea
+
+An area in a Zune window that the program draws with OpenGL or on the CPU.
+The area decides which when it is shown: OpenGL when a context can be made
+and its renderer is not a software rasteriser, otherwise the CPU, with the
+reason as text. A program that composes its picture in memory hands it to
+`zk_glarea_present()` and does not need to know which path is used.
+
+```c
+#include "zk_glarea.h"
+
+struct TagItem tags[] = {
+    { MUIA_ZkGLArea_Request, ZK_GLAREA_AUTO },      /* or _CPU, _GPU */
+    { MUIA_ZkGLArea_DrawHook, (IPTR)&draw_hook },
+    { TAG_DONE, 0 } };
+Object *area;
+
+zk_glarea_init();                           /* once; 0 on failure */
+area = zk_glarea_new(tags);
+/* in the DrawHook (object = area, message = struct zk_glarea_draw_msg *): */
+zk_glarea_present(area, rgba, w, h, w * 4); /* R, G, B, A bytes, rows top to bottom */
+/* or draw with OpenGL calls when m->mode == ZK_GLAREA_USES_GL,
+   or into m->rp at m->left, m->top when it is ZK_GLAREA_USES_CPU */
+/* when the picture has changed: */
+zk_glarea_redraw(area);
+```
+
+`MUIA_ZkGLArea_Mode` notifies after every choice (the area was shown, the
+request changed); `MUIA_ZkGLArea_Reason`, `MUIA_ZkGLArea_GLInfo` (vendor,
+renderer, version) and `MUIA_ZkGLArea_Software` say what was found.
+`ZK_GLAREA_GPU` uses OpenGL even on a software rasteriser, which is useful
+for checking the path and slow otherwise. `zk_glarea_cpu_cores()` returns
+the number of processor cores the system reports.
+
+The context is made through GLA on the area's rectangle when the area is
+shown and destroyed when it is hidden, so a new size gets a new context and
+the program's own OpenGL objects are lost with it. In OpenGL mode the
+area's context is current inside the hook and the area swaps buffers after
+it. The area does not animate by itself.
+
+Limits: checked on mainline x86_64 under QEMU with Mesa softpipe only
+(`zk-glarea-test TOUR`); no hardware driver, ABIv11 or Raspberry Pi run yet.
+The area was not checked while partly covered by another window in OpenGL
+mode. OpenGL needs a large stack (8 MB in the test).
+
+Compile `src/zk_glarea.c` and link `-lGL`.

@@ -37,6 +37,10 @@ VIEW="$R/src/zk_imageview.c $R/src/zk_imageview_core.c"
 build zk-toolbar-test "$R/tests/zk_toolbar_test.c" "$R/src/zk_toolbar.c"
 build zk-imageview-test "$R/tests/zk_imageview_test.c" $VIEW
 build zk-dragout-test "$R/tests/zk_dragout_test.c" $DRAG $VIEW
+# zk_glarea needs gl.library's link library; the Pi SDK is built without it.
+if [ -e "$SDK/lib/libGL.a" ]; then
+  build zk-glarea-test "$R/tests/zk_glarea_test.c" "$R/src/zk_glarea.c" -lGL -lm
+fi
 # zk_table_test.c is older than these flags and passes plain strings to
 # CONST_STRPTR; it alone is compiled without -Wpointer-sign.
 "$CC" --sysroot="$SDK" $CFLAGS -Wno-pointer-sign -I"$R/src" -c -o "$B/zk_table_test.o" \
