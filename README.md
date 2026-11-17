@@ -25,6 +25,7 @@ Components:
 - `zk_glarea`: an area drawn with OpenGL or on the CPU, chosen at run time from what the system offers.
 - `zk_glsurface`: the same choice and texture path without the class, for a view that already owns its rectangle.
 - `zk_resample`: scales a picture with alpha (an icon to the size a row needs) with a Lanczos filter in linear light.
+- `zk_json`, `zk_widget_snapshot`, `zk_https`: what a widget and its hosts share: a JSON reader, the answer a provider writes (status, fields, rows), and an HTTPS GET with server verification on libcurl.
 - `zk_present`: a picture with per-pixel alpha as a window of its own shape, composed where the system composes windows, otherwise blended over a picture of the screen or cut to its outline; with `zk_glass_capture` and `zk_glass_blur` for frosted glass.
 
 ## Start here
