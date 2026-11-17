@@ -427,3 +427,26 @@ browser's page view (the whole picture is uploaded on every update). No
 hardware driver, ABIv11 or Raspberry Pi run yet. OpenGL needs a large stack.
 
 Compile `src/zk_glsurface.c` and link `-lGL`.
+
+## zk_present and frosted glass
+
+A window that is a picture with per-pixel alpha: a dock, a launcher panel, a popup. The program draws the whole window in memory (A,R,G,B bytes, straight alpha) and `zk_present_put` shows it. Where the screen composes windows the picture goes out with its alpha; elsewhere it is blended over a picture of the screen taken before the window opened, which keeps smooth edges and shadows on systems without composition.
+
+```c
+#include "zk_present.h"
+#include "zk_glass_core.h"
+
+int compose = zk_present_can_compose(screen);
+/* before the window opens: what is on the screen where it will be */
+int captured = zk_glass_capture(screen, left, top, w, h, under);
+if (captured) { memcpy(glass, under, w * h * 4); zk_glass_blur(glass, w, h, 8); }
+/* ... draw `picture`, using `glass` as the body's background ... */
+win = zk_present_open(compose, tags);          /* WA_Borderless, WA_InnerWidth/Height = w, h */
+zk_present_put(win, picture, w, h, captured ? under : NULL);
+```
+
+Without composition and without a captured picture, open the window with `WA_ShapeRegion` set to `zk_present_region(picture, w, h)` so that it has the picture's outline; its edges are then whole pixels. Give the shape at open: changing the shape of an open window is not safe on every system.
+
+A pictured window shows the screen as it was when the picture was taken. That suits windows that live a few seconds; a window that stays needs to take the picture again when what is behind it changes.
+
+Build `zk_present.c` with `zk_present_compose.c` where the SDK's `intuition/intuition.h` defines `WA_AlphaSurface`, with `zk_present_none.c` elsewhere, and link with `-lcybergraphics`. `tests/zk_present_probe.c` shows all three ways. Run on mainline x86_64 (composed) and on an ABIv11 distribution (pictured, shaped), 2026-11-17.
