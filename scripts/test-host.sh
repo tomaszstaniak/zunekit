@@ -23,6 +23,7 @@ $CC $F -o "$B/zk-core-test" "$R/tests/host/zk_core_test.c" "$R/src/zk_imageview_
   "$R/src/zk_dragout_core.c"
 $CC $F -o "$B/zl-test" "$R/tests/host/zk_list_test.c" "$R/src/zk_list_core.c"
 $CC $F -o "$B/zg-test" "$R/tests/host/zk_glass_test.c" "$R/src/zk_glass_core.c"
+$CC $F -o "$B/zr-test" "$R/tests/host/zk_resample_test.c" "$R/src/zk_resample.c" -lm
 $CC $F $ZT -o "$B/lt-test" "$R/tests/host/linktext_core_test.c" "$R/src/linktext_core.c" $ZT_SRC $FT $CXXLIB
 $CC $F $ZT -Dmalloc=tm -Drealloc=tr -Dcalloc=tc $(pkg-config --cflags freetype2) -c "$R/src/zk_text.c" -o "$B/zk_text_f.o"
 $CC $F $ZT -o "$B/zt-test" "$R/tests/host/zk_text_test.c" "$B/zk_text_f.o" \
@@ -32,6 +33,7 @@ $CC $F $ZT -o "$B/ze-test" "$R/tests/host/zk_edit_test.c" "$B/zk_edit_core.o" $Z
 "$B/zk-core-test"
 "$B/zl-test"
 "$B/zg-test"
+"$B/zr-test"
 "$B/lt-test"
 "$B/zt-test" "$R/tests/fixtures/fonts" "${ZUNEKIT_COLOR_FONT:-}"
 "$B/ze-test" "$R/tests/fixtures/fonts"
