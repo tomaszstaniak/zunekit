@@ -14,6 +14,10 @@
 #ifndef GL_UNPACK_ROW_LENGTH
 #define GL_UNPACK_ROW_LENGTH 0x0CF2
 #endif
+#ifndef GL_UNPACK_SKIP_ROWS
+#define GL_UNPACK_SKIP_ROWS 0x0CF3
+#define GL_UNPACK_SKIP_PIXELS 0x0CF4
+#endif
 #ifndef GL_BGRA
 #define GL_BGRA 0x80E1
 #endif
@@ -108,6 +112,12 @@ void zk_glsurface_close(struct zk_glsurface *s)
 void zk_glsurface_present(struct zk_glsurface *s, const UBYTE *pixels, LONG w, LONG h,
                           LONG stride, LONG format)
 {
+    zk_glsurface_present_rect(s, pixels, w, h, stride, format, 0, 0, w, h);
+}
+
+void zk_glsurface_present_rect(struct zk_glsurface *s, const UBYTE *pixels, LONG w, LONG h,
+                               LONG stride, LONG format, LONG x, LONG y, LONG rw, LONG rh)
+{
     GLenum glformat = format == ZK_GLSURFACE_BGRA ? GL_BGRA : GL_RGBA;
     float x1, y0;
 
@@ -130,8 +140,20 @@ void zk_glsurface_present(struct zk_glsurface *s, const UBYTE *pixels, LONG w, L
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, glformat, GL_UNSIGNED_BYTE, pixels);
         s->tw = w;
         s->th = h;
-    } else
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, glformat, GL_UNSIGNED_BYTE, pixels);
+    } else {
+        /* Clip the changed rectangle to the picture, then upload only it. */
+        if (x < 0) { rw += x; x = 0; }
+        if (y < 0) { rh += y; y = 0; }
+        if (rw > w - x) rw = w - x;
+        if (rh > h - y) rh = h - y;
+        if (rw > 0 && rh > 0) {
+            glPixelStorei(GL_UNPACK_SKIP_PIXELS, x);
+            glPixelStorei(GL_UNPACK_SKIP_ROWS, y);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, rw, rh, glformat, GL_UNSIGNED_BYTE, pixels);
+            glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+            glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+        }
+    }
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 
     x1 = -1.0f + 2.0f * (float)w / (float)s->width;

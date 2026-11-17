@@ -422,6 +422,12 @@ zk_glsurface_close(s);
 `zk_glsurface_last_software()` say what the last call found.
 `ZK_GLSURFACE_BGRA` is cairo's ARGB32 on little endian machines.
 
+`zk_glsurface_present_rect()` takes the rectangle of the picture that
+changed since the last call and uploads only that part. Under Mesa softpipe
+this made no difference in a browser page view (19.4 frames/s of a canvas
+loop either way, 33.7 on the CPU path): drawing the quad costs there, not
+the upload.
+
 Limits: checked on mainline x86_64 under QEMU with Mesa softpipe, in a
 browser's page view (the whole picture is uploaded on every update). No
 hardware driver, ABIv11 or Raspberry Pi run yet. OpenGL needs a large stack.

@@ -48,6 +48,13 @@ void zk_glsurface_close(struct zk_glsurface *s);
 void zk_glsurface_present(struct zk_glsurface *s, const UBYTE *pixels, LONG w, LONG h,
                           LONG stride, LONG format);
 
+/* As zk_glsurface_present(), for a picture of which only the rectangle
+ * x, y, rw, rh (picture pixels) changed since the last call with the same
+ * size: only that part is uploaded. The whole picture is uploaded when the
+ * size differs from the last call. */
+void zk_glsurface_present_rect(struct zk_glsurface *s, const UBYTE *pixels, LONG w, LONG h,
+                               LONG stride, LONG format, LONG x, LONG y, LONG rw, LONG rh);
+
 /* "requested", "hardware OpenGL found", "OpenGL here is a software
  * rasteriser", "no OpenGL context". */
 const char *zk_glsurface_last_reason(void);
